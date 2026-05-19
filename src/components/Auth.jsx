@@ -30,7 +30,7 @@ export default function Auth() {
     <div className="auth-page">
       <div className="auth-card">
         <div className="auth-logo">⬡</div>
-        <h1 className="auth-title">Steel CRM</h1>
+        <h1 className="auth-title">Phoenix CRM</h1>
         <p className="auth-sub">Electric steel sales platform</p>
 
         <form onSubmit={handleSubmit} className="auth-form">
