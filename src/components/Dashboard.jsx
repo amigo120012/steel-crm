@@ -20,7 +20,7 @@ export default function Dashboard({ session }) {
       <aside className="sidebar">
         <div className="sidebar-brand">
           <span className="brand-icon">⬡</span>
-          <span className="brand-name">Steel CRM</span>
+          <span className="brand-name">Phoenix CRM</span>
         </div>
         <nav className="sidebar-nav">
           {NAV.map(n => (
