@@ -3,13 +3,11 @@ import { supabase } from "../supabaseClient";
 import Vendors from "./Vendors";
 import Customers from "./Customers";
 import Orders from "./Orders";
-import Rankings from "./Rankings";
 
 const NAV = [
   { id: "vendors",   label: "Vendors",   icon: "" },
   { id: "customers", label: "Customers", icon: "" },
   { id: "orders",    label: "Orders",    icon: "" },
-  { id: "rankings",  label: "Rankings",  icon: "" },
 ];
 
 export default function Dashboard({ session }) {
@@ -46,7 +44,6 @@ export default function Dashboard({ session }) {
         {tab === "vendors"   && <Vendors />}
         {tab === "customers" && <Customers />}
         {tab === "orders"    && <Orders />}
-        {tab === "rankings"  && <Rankings />}
       </main>
     </div>
   );
