@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import * as XLSX from "xlsx";
 import { supabase } from "../supabaseClient";
 import Modal from "./Modal";
 import ProfilePanel from "./ProfilePanel";
@@ -42,7 +43,6 @@ const toNote = (rep, grade, slit, ctl, steplap, unicore, tranco, state, comments
   if (comments) parts.push(comments);
   return parts.join(" | ");
 };
-
 const mapGrade = g => {
   if (!g) return "M6";
   if (["M6", "M4", "M3"].includes(g)) return g;
@@ -107,7 +107,8 @@ const SALES_LOG_DATA = [
   ["Pemco","JP",null,"x","x",null,null,null,null,"WV",null,null],
 ];
 
-const truncate = (s, n = 60) => s && s.length > n ? s.slice(0, n) + "…" : (s || "—");
+const truncate = (s, n = 60) => s && s.length > n ? s.slice(0, n) + "…" : (s || "");
+const NUMERIC_COLS = new Set(["order_qty_yr", "target_margin_pct"]);
 
 export default function Customers() {
   const [customers, setCustomers] = useState([]);
@@ -121,6 +122,8 @@ export default function Customers() {
   const [selected, setSelected] = useState(null);
   const [importing, setImporting] = useState(false);
   const [sort, setSort] = useState({ col: null, dir: "asc" });
+  const [editing, setEditing] = useState(null); // { id, col, value }
+  const importRef = useRef(null);
 
   useEffect(() => { fetchCustomers(); }, []);
 
@@ -170,6 +173,103 @@ export default function Customers() {
     setShowModal(true);
   }
 
+  // ── Inline editing ────────────────────────────────────────
+  function startEdit(e, id, col, value) {
+    e.stopPropagation();
+    setEditing({ id, col, value: value ?? "" });
+  }
+
+  async function saveInline() {
+    if (!editing) return;
+    const { id, col, value } = editing;
+    const dbValue = NUMERIC_COLS.has(col)
+      ? (value !== "" ? Number(value) : null)
+      : (value || null);
+    setEditing(null);
+    setCustomers(cs => cs.map(c => c.id === id ? { ...c, [col]: dbValue } : c));
+    await supabase.from("customers").update({ [col]: dbValue }).eq("id", id);
+  }
+
+  async function saveSelectInline(id, col, value) {
+    setEditing(null);
+    setCustomers(cs => cs.map(c => c.id === id ? { ...c, [col]: value } : c));
+    await supabase.from("customers").update({ [col]: value }).eq("id", id);
+  }
+
+  function handleInlineKey(e) {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); saveInline(); }
+    if (e.key === "Escape") setEditing(null);
+  }
+
+  // ── Excel import/export ───────────────────────────────────
+  function exportExcel() {
+    const rows = customers.map(c => ({
+      id: c.id,
+      Name: c.name || "",
+      Location: c.location || "",
+      "Grade Desired": c.grade_desired || "",
+      "Order Qty/Yr (mt)": c.order_qty_yr ?? "",
+      "Target Margin %": c.target_margin_pct ?? "",
+      "Core Details": c.core_details || "",
+      "Contact Name": c.contact_name || "",
+      Email: c.email || "",
+      Phone: c.phone || "",
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    ws["!cols"] = [
+      { wch: 36 }, { wch: 24 }, { wch: 18 }, { wch: 14 },
+      { wch: 16 }, { wch: 14 }, { wch: 50 }, { wch: 20 }, { wch: 28 }, { wch: 16 },
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Customers");
+    XLSX.writeFile(wb, "customers.xlsx");
+  }
+
+  async function handleImportExcel(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    e.target.value = "";
+    setImporting(true);
+
+    const reader = new FileReader();
+    reader.onload = async ev => {
+      const wb = XLSX.read(new Uint8Array(ev.target.result), { type: "array" });
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+
+      if (rows.length === 0) { alert("No data found in file."); setImporting(false); return; }
+
+      const mapRow = r => ({
+        name: r.Name || "",
+        location: r.Location || "",
+        grade_desired: r["Grade Desired"] || "M6",
+        order_qty_yr: r["Order Qty/Yr (mt)"] !== "" && r["Order Qty/Yr (mt)"] != null ? Number(r["Order Qty/Yr (mt)"]) : null,
+        target_margin_pct: r["Target Margin %"] !== "" && r["Target Margin %"] != null ? Number(r["Target Margin %"]) : null,
+        core_details: r["Core Details"] || "",
+        contact_name: r["Contact Name"] || "",
+        email: r.Email || "",
+        phone: r.Phone || "",
+      });
+
+      const toUpdate = rows.filter(r => r.id);
+      const toInsert = rows.filter(r => !r.id);
+      let errors = 0;
+
+      for (const r of toUpdate) {
+        const { error } = await supabase.from("customers").update(mapRow(r)).eq("id", r.id);
+        if (error) errors++;
+      }
+      if (toInsert.length > 0) {
+        const { error } = await supabase.from("customers").insert(toInsert.map(mapRow));
+        if (error) errors++;
+      }
+
+      setImporting(false);
+      fetchCustomers();
+      alert(`Import complete: ${toUpdate.length} updated, ${toInsert.length} added${errors ? `, ${errors} error(s)` : ""}.`);
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
   async function importSalesLog() {
     if (!confirm(`Import ${SALES_LOG_DATA.length} customers from the PSS Sales Log? This will add them to the existing list.`)) return;
     setImporting(true);
@@ -188,17 +288,6 @@ export default function Customers() {
     setImporting(false);
     if (error) { alert("Import failed: " + error.message); return; }
     fetchCustomers();
-  }
-
-  async function exportCSV() {
-    const rows = customers.map(c =>
-      [c.name, c.location, c.grade_desired, c.order_qty_yr, c.target_margin_pct, c.contact_name, c.email].join(",")
-    );
-    const csv = ["Name,Location,Grade Desired,Order Qty/Yr,Target Margin %,Contact,Email", ...rows].join("\n");
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
-    a.download = "customers.csv";
-    a.click();
   }
 
   function toggleSort(col) {
@@ -252,9 +341,19 @@ export default function Customers() {
           <p className="page-sub">{customers.length} customers in database</p>
         </div>
         <div className="header-actions">
-          <button className="btn-outline" onClick={exportCSV}>↓ Export CSV</button>
+          <button className="btn-outline" onClick={() => importRef.current.click()} disabled={importing}>
+            ↑ Import Excel
+          </button>
+          <input
+            ref={importRef}
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            style={{ display: "none" }}
+            onChange={handleImportExcel}
+          />
+          <button className="btn-outline" onClick={exportExcel}>↓ Export Excel</button>
           <button className="btn-outline" onClick={importSalesLog} disabled={importing}>
-            {importing ? "Importing..." : "↑ Import Sales Log"}
+            {importing ? "Importing..." : "↑ Sales Log"}
           </button>
           <button className="btn-primary" onClick={() => { setForm(EMPTY); setEditId(null); setShowModal(true); }}>
             + Add customer
@@ -292,14 +391,125 @@ export default function Customers() {
             <tbody>
               {filtered.map(c => (
                 <tr key={c.id} onClick={() => setSelected(c)} style={{ cursor: "pointer" }}>
+
+                  {/* Company name — click opens profile */}
                   <td><strong>{c.name}</strong></td>
-                  <td>{c.location || "—"}</td>
-                  <td><code>{c.grade_desired || "—"}</code></td>
-                  <td>{c.order_qty_yr ? Number(c.order_qty_yr).toLocaleString() + " mt/yr" : "—"}</td>
-                  <td>{c.target_margin_pct != null && c.target_margin_pct !== "" ? c.target_margin_pct + "%" : "—"}</td>
-                  <td style={{ maxWidth: 220 }}><span className="cell-truncate">{truncate(c.core_details)}</span></td>
+
+                  {/* Location — inline editable */}
+                  <td
+                    className="editable-cell"
+                    onClick={e => startEdit(e, c.id, "location", c.location)}
+                    title="Click to edit"
+                  >
+                    {editing?.id === c.id && editing?.col === "location" ? (
+                      <input
+                        className="inline-input"
+                        autoFocus
+                        value={editing.value}
+                        onChange={e => setEditing(ed => ({ ...ed, value: e.target.value }))}
+                        onBlur={saveInline}
+                        onKeyDown={handleInlineKey}
+                      />
+                    ) : (
+                      <span className={c.location ? "" : "placeholder-text"}>{c.location || "—"}</span>
+                    )}
+                  </td>
+
+                  {/* Grade Desired — inline select */}
+                  <td
+                    className="editable-cell"
+                    onClick={e => startEdit(e, c.id, "grade_desired", c.grade_desired)}
+                    title="Click to edit"
+                  >
+                    {editing?.id === c.id && editing?.col === "grade_desired" ? (
+                      <select
+                        className="inline-select"
+                        autoFocus
+                        value={editing.value}
+                        onChange={e => saveSelectInline(c.id, "grade_desired", e.target.value)}
+                        onBlur={() => setEditing(null)}
+                        onKeyDown={e => e.key === "Escape" && setEditing(null)}
+                      >
+                        {STEEL_GRADES.map(g => <option key={g}>{g}</option>)}
+                      </select>
+                    ) : (
+                      <code>{c.grade_desired || "—"}</code>
+                    )}
+                  </td>
+
+                  {/* Order Qty/Yr — inline number */}
+                  <td
+                    className="editable-cell"
+                    onClick={e => startEdit(e, c.id, "order_qty_yr", c.order_qty_yr)}
+                    title="Click to edit"
+                  >
+                    {editing?.id === c.id && editing?.col === "order_qty_yr" ? (
+                      <input
+                        className="inline-input"
+                        type="number"
+                        autoFocus
+                        value={editing.value}
+                        onChange={e => setEditing(ed => ({ ...ed, value: e.target.value }))}
+                        onBlur={saveInline}
+                        onKeyDown={handleInlineKey}
+                      />
+                    ) : (
+                      <span className={c.order_qty_yr ? "" : "placeholder-text"}>
+                        {c.order_qty_yr ? Number(c.order_qty_yr).toLocaleString() + " mt/yr" : "—"}
+                      </span>
+                    )}
+                  </td>
+
+                  {/* Target Margin % — inline number */}
+                  <td
+                    className="editable-cell"
+                    onClick={e => startEdit(e, c.id, "target_margin_pct", c.target_margin_pct)}
+                    title="Click to edit"
+                  >
+                    {editing?.id === c.id && editing?.col === "target_margin_pct" ? (
+                      <input
+                        className="inline-input"
+                        type="number"
+                        step="0.1"
+                        autoFocus
+                        value={editing.value}
+                        onChange={e => setEditing(ed => ({ ...ed, value: e.target.value }))}
+                        onBlur={saveInline}
+                        onKeyDown={handleInlineKey}
+                      />
+                    ) : (
+                      <span className={c.target_margin_pct != null && c.target_margin_pct !== "" ? "" : "placeholder-text"}>
+                        {c.target_margin_pct != null && c.target_margin_pct !== "" ? c.target_margin_pct + "%" : "—"}
+                      </span>
+                    )}
+                  </td>
+
+                  {/* Core Details — inline textarea */}
+                  <td
+                    className="editable-cell"
+                    style={{ maxWidth: 240 }}
+                    onClick={e => startEdit(e, c.id, "core_details", c.core_details)}
+                    title="Click to edit"
+                  >
+                    {editing?.id === c.id && editing?.col === "core_details" ? (
+                      <textarea
+                        className="inline-textarea"
+                        autoFocus
+                        value={editing.value}
+                        onChange={e => setEditing(ed => ({ ...ed, value: e.target.value }))}
+                        onBlur={saveInline}
+                        onKeyDown={e => e.key === "Escape" && setEditing(null)}
+                        rows={3}
+                      />
+                    ) : (
+                      <span className={`cell-truncate ${!c.core_details ? "placeholder-text" : ""}`}>
+                        {truncate(c.core_details) || "—"}
+                      </span>
+                    )}
+                  </td>
+
                   <td onClick={e => e.stopPropagation()}>
-                    <button className="icon-btn" onClick={() => openEdit(c)} title="Edit">✎</button>
+                    <button className="icon-btn" onClick={() => openEdit(c)} title="Edit all fields">✎</button>
                     <button className="icon-btn danger" onClick={() => remove(c.id)} title="Delete">✕</button>
                   </td>
                 </tr>
@@ -317,19 +527,11 @@ export default function Customers() {
           <div className="form-grid">
             <div className="field-group">
               <label>Company name *</label>
-              <input
-                value={form.name}
-                onChange={e => setForm({ ...form, name: e.target.value })}
-                placeholder="Siemens Energy AG"
-              />
+              <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Siemens Energy AG" />
             </div>
             <div className="field-group">
               <label>Location</label>
-              <input
-                value={form.location}
-                onChange={e => setForm({ ...form, location: e.target.value })}
-                placeholder="Ohio, USA"
-              />
+              <input value={form.location} onChange={e => setForm({ ...form, location: e.target.value })} placeholder="Ohio, USA" />
             </div>
             <div className="field-group">
               <label>Grade of steels desired</label>
@@ -339,56 +541,27 @@ export default function Customers() {
             </div>
             <div className="field-group">
               <label>Order Qty / Yr (mt/yr)</label>
-              <input
-                type="number"
-                value={form.order_qty_yr}
-                onChange={e => setForm({ ...form, order_qty_yr: e.target.value })}
-                placeholder="1000"
-              />
+              <input type="number" value={form.order_qty_yr} onChange={e => setForm({ ...form, order_qty_yr: e.target.value })} placeholder="1000" />
             </div>
             <div className="field-group">
               <label>Target Margin %</label>
-              <input
-                type="number"
-                step="0.1"
-                value={form.target_margin_pct}
-                onChange={e => setForm({ ...form, target_margin_pct: e.target.value })}
-                placeholder="12.5"
-              />
+              <input type="number" step="0.1" value={form.target_margin_pct} onChange={e => setForm({ ...form, target_margin_pct: e.target.value })} placeholder="12.5" />
             </div>
             <div className="field-group">
               <label>Contact name</label>
-              <input
-                value={form.contact_name}
-                onChange={e => setForm({ ...form, contact_name: e.target.value })}
-                placeholder="Full name"
-              />
+              <input value={form.contact_name} onChange={e => setForm({ ...form, contact_name: e.target.value })} placeholder="Full name" />
             </div>
             <div className="field-group">
               <label>Email</label>
-              <input
-                type="email"
-                value={form.email}
-                onChange={e => setForm({ ...form, email: e.target.value })}
-                placeholder="email@company.com"
-              />
+              <input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="email@company.com" />
             </div>
             <div className="field-group">
               <label>Phone</label>
-              <input
-                value={form.phone}
-                onChange={e => setForm({ ...form, phone: e.target.value })}
-                placeholder="+1 555 000 0000"
-              />
+              <input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} placeholder="+1 555 000 0000" />
             </div>
             <div className="field-group span-2">
               <label>Core Details</label>
-              <textarea
-                value={form.core_details}
-                onChange={e => setForm({ ...form, core_details: e.target.value })}
-                rows={4}
-                placeholder="Requirements, specifications, relationship notes..."
-              />
+              <textarea value={form.core_details} onChange={e => setForm({ ...form, core_details: e.target.value })} rows={4} placeholder="Requirements, specifications, relationship notes..." />
             </div>
           </div>
           <div className="modal-footer">

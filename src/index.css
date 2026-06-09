@@ -98,6 +98,39 @@ code { font-family: var(--mono); font-size: 12px; background: #1e1e1e; padding: 
 .sort-arrow.active { opacity: 1; color: var(--accent); }
 
 .cell-truncate { color: var(--text-muted); font-size: 12px; }
+.placeholder-text { color: var(--text-muted); }
+
+/* ── Inline editing ───────────────────────────────────── */
+.editable-cell { cursor: text; position: relative; }
+.editable-cell:hover { background: rgba(249, 115, 22, 0.06); }
+.editable-cell:hover::after {
+  content: "✎";
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  color: var(--accent);
+  opacity: 0.5;
+  pointer-events: none;
+}
+.inline-input {
+  background: #0f0f0f; border: 1px solid var(--accent); border-radius: 4px;
+  padding: 4px 8px; font-family: var(--font); font-size: 13px; color: var(--text);
+  width: 100%; min-width: 80px;
+}
+.inline-input:focus { outline: none; }
+.inline-select {
+  background: #0f0f0f; border: 1px solid var(--accent); border-radius: 4px;
+  padding: 4px 8px; font-family: var(--font); font-size: 13px; color: var(--text);
+}
+.inline-select:focus { outline: none; }
+.inline-textarea {
+  background: #0f0f0f; border: 1px solid var(--accent); border-radius: 4px;
+  padding: 4px 8px; font-family: var(--font); font-size: 12px; color: var(--text);
+  width: 100%; min-width: 160px; resize: vertical;
+}
+.inline-textarea:focus { outline: none; }
 
 /* ── Price expand row ─────────────────────────────────── */
 .price-expand-row td { background: var(--accent-light) !important; border-bottom: 1px solid var(--border); }
