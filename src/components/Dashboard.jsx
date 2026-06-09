@@ -18,7 +18,7 @@ export default function Dashboard({ session }) {
       <aside className="sidebar">
         <div className="sidebar-brand">
           <span className="brand-icon">⬡</span>
-          <span className="brand-name">Phoenix CRM</span>
+          <span className="brand-name">Phoenix.SS</span>
         </div>
         <nav className="sidebar-nav">
           {NAV.map(n => (

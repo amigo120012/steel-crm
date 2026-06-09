@@ -3,9 +3,13 @@ import { supabase } from "../supabaseClient";
 import Modal from "./Modal";
 import ProfilePanel from "./ProfilePanel";
 
+const STEEL_GRADES = ["M6", "M4", "M3", "Other"];
+
 const EMPTY = {
-  name: "", industry: "Manufacturing", country: "", annual_spend: "",
-  contact_name: "", email: "", phone: "", notes: "", status: "Active", rating: 3
+  name: "", location: "", grade_desired: "M6",
+  order_qty_yr: "", target_margin_pct: "",
+  contact_name: "", email: "", phone: "",
+  core_details: ""
 };
 
 const US_STATES = new Set([
@@ -16,7 +20,7 @@ const US_STATES = new Set([
 ]);
 const toCountry = s => {
   if (!s) return "";
-  if (US_STATES.has(s)) return "USA";
+  if (US_STATES.has(s)) return `${s}, USA`;
   if (s === "MX") return "Mexico";
   if (s === "ON") return "Canada";
   return s;
@@ -37,6 +41,12 @@ const toNote = (rep, grade, slit, ctl, steplap, unicore, tranco, state, comments
   if (US_STATES.has(state)) parts.push(`State: ${state}`);
   if (comments) parts.push(comments);
   return parts.join(" | ");
+};
+
+const mapGrade = g => {
+  if (!g) return "M6";
+  if (["M6", "M4", "M3"].includes(g)) return g;
+  return "Other";
 };
 
 // [name, rep, slit, ctl, steplap, unicore, tranco, total, grade, state, comments, contact]
@@ -97,21 +107,20 @@ const SALES_LOG_DATA = [
   ["Pemco","JP",null,"x","x",null,null,null,null,"WV",null,null],
 ];
 
-const RANK = r => r >= 4.5 ? "A" : r >= 3.5 ? "B" : r >= 2.5 ? "C" : "D";
-const RANK_CLASS = r => ({ A: "rank-a", B: "rank-b", C: "rank-c", D: "rank-d" })[RANK(r)];
-const fmt = n => n ? Number(n).toLocaleString() + " mt/yr" : "—";
+const truncate = (s, n = 60) => s && s.length > n ? s.slice(0, n) + "…" : (s || "—");
 
 export default function Customers() {
   const [customers, setCustomers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [industryFilter, setIndustryFilter] = useState("");
+  const [gradeFilter, setGradeFilter] = useState("");
   const [showModal, setShowModal] = useState(false);
   const [form, setForm] = useState(EMPTY);
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [selected, setSelected] = useState(null);
   const [importing, setImporting] = useState(false);
+  const [sort, setSort] = useState({ col: null, dir: "asc" });
 
   useEffect(() => { fetchCustomers(); }, []);
 
@@ -124,7 +133,11 @@ export default function Customers() {
 
   async function save() {
     setSaving(true);
-    const payload = { ...form, annual_spend: form.annual_spend ? Number(form.annual_spend) : null };
+    const payload = {
+      ...form,
+      order_qty_yr: form.order_qty_yr ? Number(form.order_qty_yr) : null,
+      target_margin_pct: form.target_margin_pct ? Number(form.target_margin_pct) : null,
+    };
     if (editId) {
       await supabase.from("customers").update(payload).eq("id", editId);
     } else {
@@ -145,9 +158,14 @@ export default function Customers() {
   }
 
   function openEdit(c) {
-    setForm({ name: c.name, industry: c.industry, country: c.country,
-      annual_spend: c.annual_spend || "", contact_name: c.contact_name,
-      email: c.email, phone: c.phone, notes: c.notes, status: c.status, rating: c.rating });
+    setForm({
+      name: c.name || "", location: c.location || "",
+      grade_desired: c.grade_desired || "M6",
+      order_qty_yr: c.order_qty_yr || "",
+      target_margin_pct: c.target_margin_pct || "",
+      contact_name: c.contact_name || "", email: c.email || "",
+      phone: c.phone || "", core_details: c.core_details || ""
+    });
     setEditId(c.id);
     setShowModal(true);
   }
@@ -157,15 +175,14 @@ export default function Customers() {
     setImporting(true);
     const records = SALES_LOG_DATA.map(([name, rep, slit, ctl, steplap, unicore, tranco, total, grade, state, comments, contact]) => ({
       name,
-      industry: "Manufacturing",
-      country: toCountry(state),
-      annual_spend: typeof total === "number" ? total : null,
+      location: toCountry(state),
+      grade_desired: mapGrade(grade),
+      order_qty_yr: typeof total === "number" ? total : null,
+      target_margin_pct: null,
       contact_name: contact || "",
       email: "",
       phone: "",
-      notes: toNote(rep, grade, slit, ctl, steplap, unicore, tranco, state, comments),
-      status: typeof total === "number" ? "Active" : "Prospect",
-      rating: 3,
+      core_details: toNote(rep, grade, slit, ctl, steplap, unicore, tranco, state, comments),
     }));
     const { error } = await supabase.from("customers").insert(records);
     setImporting(false);
@@ -175,24 +192,56 @@ export default function Customers() {
 
   async function exportCSV() {
     const rows = customers.map(c =>
-      [c.name, c.industry, c.country, c.annual_spend, c.rating, RANK(c.rating), c.status, c.contact_name, c.email].join(",")
+      [c.name, c.location, c.grade_desired, c.order_qty_yr, c.target_margin_pct, c.contact_name, c.email].join(",")
     );
-    const csv = ["Name,Industry,Country,Volume (mt/yr),Rating,Rank,Status,Contact,Email", ...rows].join("\n");
+    const csv = ["Name,Location,Grade Desired,Order Qty/Yr,Target Margin %,Contact,Email", ...rows].join("\n");
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
     a.download = "customers.csv";
     a.click();
   }
 
-  const filtered = customers.filter(c => {
+  function toggleSort(col) {
+    setSort(s => ({ col, dir: s.col === col && s.dir === "asc" ? "desc" : "asc" }));
+  }
+
+  const sortIcon = col => {
+    if (sort.col !== col) return <span className="sort-arrow">↕</span>;
+    return <span className="sort-arrow active">{sort.dir === "asc" ? "↑" : "↓"}</span>;
+  };
+
+  let filtered = customers.filter(c => {
     const q = search.toLowerCase();
-    const matchSearch = !q || c.name?.toLowerCase().includes(q) || c.country?.toLowerCase().includes(q) || c.industry?.toLowerCase().includes(q);
-    const matchInd = !industryFilter || c.industry === industryFilter;
-    return matchSearch && matchInd;
+    const matchSearch = !q ||
+      c.name?.toLowerCase().includes(q) ||
+      c.location?.toLowerCase().includes(q) ||
+      c.grade_desired?.toLowerCase().includes(q) ||
+      c.core_details?.toLowerCase().includes(q);
+    const matchGrade = !gradeFilter || c.grade_desired === gradeFilter;
+    return matchSearch && matchGrade;
   });
 
+  if (sort.col) {
+    filtered = [...filtered].sort((a, b) => {
+      const va = a[sort.col] ?? "";
+      const vb = b[sort.col] ?? "";
+      if (typeof va === "number" && typeof vb === "number")
+        return sort.dir === "asc" ? va - vb : vb - va;
+      return sort.dir === "asc"
+        ? String(va).localeCompare(String(vb))
+        : String(vb).localeCompare(String(va));
+    });
+  }
+
   if (selected) {
-    return <ProfilePanel entity={selected} type="customer" onBack={() => setSelected(null)} onEdit={() => openEdit(selected)} onDelete={() => { remove(selected.id); setSelected(null); }} />;
+    return (
+      <ProfilePanel
+        entity={selected} type="customer"
+        onBack={() => setSelected(null)}
+        onEdit={() => openEdit(selected)}
+        onDelete={() => { remove(selected.id); setSelected(null); }}
+      />
+    );
   }
 
   return (
@@ -204,16 +253,25 @@ export default function Customers() {
         </div>
         <div className="header-actions">
           <button className="btn-outline" onClick={exportCSV}>↓ Export CSV</button>
-          <button className="btn-outline" onClick={importSalesLog} disabled={importing}>{importing ? "Importing..." : "↑ Import Sales Log"}</button>
-          <button className="btn-primary" onClick={() => { setForm(EMPTY); setEditId(null); setShowModal(true); }}>+ Add customer</button>
+          <button className="btn-outline" onClick={importSalesLog} disabled={importing}>
+            {importing ? "Importing..." : "↑ Import Sales Log"}
+          </button>
+          <button className="btn-primary" onClick={() => { setForm(EMPTY); setEditId(null); setShowModal(true); }}>
+            + Add customer
+          </button>
         </div>
       </div>
 
       <div className="filters">
-        <input className="search-input" placeholder="Search customers..." value={search} onChange={e => setSearch(e.target.value)} />
-        <select value={industryFilter} onChange={e => setIndustryFilter(e.target.value)}>
-          <option value="">All industries</option>
-          <option>Automotive</option><option>Energy</option><option>Construction</option><option>Manufacturing</option>
+        <input
+          className="search-input"
+          placeholder="Search customers..."
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+        />
+        <select value={gradeFilter} onChange={e => setGradeFilter(e.target.value)}>
+          <option value="">All grades</option>
+          {STEEL_GRADES.map(g => <option key={g}>{g}</option>)}
         </select>
       </div>
 
@@ -222,27 +280,33 @@ export default function Customers() {
           <table>
             <thead>
               <tr>
-                <th>Customer</th><th>Industry</th><th>Country</th><th>Volume (mt/yr)</th>
-                <th>Rating</th><th>Rank</th><th>Status</th><th></th>
+                <th className="sortable" onClick={() => toggleSort("name")}>Customer {sortIcon("name")}</th>
+                <th className="sortable" onClick={() => toggleSort("location")}>Location {sortIcon("location")}</th>
+                <th className="sortable" onClick={() => toggleSort("grade_desired")}>Grade Desired {sortIcon("grade_desired")}</th>
+                <th className="sortable" onClick={() => toggleSort("order_qty_yr")}>Order Qty/Yr {sortIcon("order_qty_yr")}</th>
+                <th className="sortable" onClick={() => toggleSort("target_margin_pct")}>Target Margin % {sortIcon("target_margin_pct")}</th>
+                <th>Core Details</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
               {filtered.map(c => (
                 <tr key={c.id} onClick={() => setSelected(c)} style={{ cursor: "pointer" }}>
                   <td><strong>{c.name}</strong></td>
-                  <td>{c.industry}</td>
-                  <td>{c.country}</td>
-                  <td><strong>{fmt(c.annual_spend)}</strong></td>
-                  <td>{"★".repeat(Math.round(c.rating))}{"☆".repeat(5 - Math.round(c.rating))} {c.rating}</td>
-                  <td><span className={`rank-badge ${RANK_CLASS(c.rating)}`}>{RANK(c.rating)}</span></td>
-                  <td><span className={`badge ${c.status === "Active" ? "badge-green" : "badge-gray"}`}>{c.status}</span></td>
+                  <td>{c.location || "—"}</td>
+                  <td><code>{c.grade_desired || "—"}</code></td>
+                  <td>{c.order_qty_yr ? Number(c.order_qty_yr).toLocaleString() + " mt/yr" : "—"}</td>
+                  <td>{c.target_margin_pct != null && c.target_margin_pct !== "" ? c.target_margin_pct + "%" : "—"}</td>
+                  <td style={{ maxWidth: 220 }}><span className="cell-truncate">{truncate(c.core_details)}</span></td>
                   <td onClick={e => e.stopPropagation()}>
                     <button className="icon-btn" onClick={() => openEdit(c)} title="Edit">✎</button>
                     <button className="icon-btn danger" onClick={() => remove(c.id)} title="Delete">✕</button>
                   </td>
                 </tr>
               ))}
-              {filtered.length === 0 && <tr><td colSpan={8} className="empty-row">No customers found</td></tr>}
+              {filtered.length === 0 && (
+                <tr><td colSpan={7} className="empty-row">No customers found</td></tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -253,47 +317,78 @@ export default function Customers() {
           <div className="form-grid">
             <div className="field-group">
               <label>Company name *</label>
-              <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} placeholder="Siemens Energy AG" />
+              <input
+                value={form.name}
+                onChange={e => setForm({ ...form, name: e.target.value })}
+                placeholder="Siemens Energy AG"
+              />
             </div>
             <div className="field-group">
-              <label>Industry</label>
-              <select value={form.industry} onChange={e => setForm({ ...form, industry: e.target.value })}>
-                <option>Automotive</option><option>Energy</option><option>Construction</option><option>Manufacturing</option><option>Other</option>
+              <label>Location</label>
+              <input
+                value={form.location}
+                onChange={e => setForm({ ...form, location: e.target.value })}
+                placeholder="Ohio, USA"
+              />
+            </div>
+            <div className="field-group">
+              <label>Grade of steels desired</label>
+              <select value={form.grade_desired} onChange={e => setForm({ ...form, grade_desired: e.target.value })}>
+                {STEEL_GRADES.map(g => <option key={g}>{g}</option>)}
               </select>
             </div>
             <div className="field-group">
-              <label>Country</label>
-              <input value={form.country} onChange={e => setForm({ ...form, country: e.target.value })} placeholder="Germany" />
+              <label>Order Qty / Yr (mt/yr)</label>
+              <input
+                type="number"
+                value={form.order_qty_yr}
+                onChange={e => setForm({ ...form, order_qty_yr: e.target.value })}
+                placeholder="1000"
+              />
             </div>
             <div className="field-group">
-              <label>Volume (mt/yr)</label>
-              <input type="number" value={form.annual_spend} onChange={e => setForm({ ...form, annual_spend: e.target.value })} placeholder="1000" />
+              <label>Target Margin %</label>
+              <input
+                type="number"
+                step="0.1"
+                value={form.target_margin_pct}
+                onChange={e => setForm({ ...form, target_margin_pct: e.target.value })}
+                placeholder="12.5"
+              />
             </div>
             <div className="field-group">
               <label>Contact name</label>
-              <input value={form.contact_name} onChange={e => setForm({ ...form, contact_name: e.target.value })} placeholder="Full name" />
+              <input
+                value={form.contact_name}
+                onChange={e => setForm({ ...form, contact_name: e.target.value })}
+                placeholder="Full name"
+              />
             </div>
             <div className="field-group">
               <label>Email</label>
-              <input type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="email@company.com" />
+              <input
+                type="email"
+                value={form.email}
+                onChange={e => setForm({ ...form, email: e.target.value })}
+                placeholder="email@company.com"
+              />
             </div>
             <div className="field-group">
               <label>Phone</label>
-              <input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} placeholder="+1 555 000 0000" />
-            </div>
-            <div className="field-group">
-              <label>Status</label>
-              <select value={form.status} onChange={e => setForm({ ...form, status: e.target.value })}>
-                <option>Active</option><option>Inactive</option><option>Prospect</option>
-              </select>
-            </div>
-            <div className="field-group">
-              <label>Rating (1–5)</label>
-              <input type="number" min="1" max="5" step="0.1" value={form.rating} onChange={e => setForm({ ...form, rating: parseFloat(e.target.value) })} />
+              <input
+                value={form.phone}
+                onChange={e => setForm({ ...form, phone: e.target.value })}
+                placeholder="+1 555 000 0000"
+              />
             </div>
             <div className="field-group span-2">
-              <label>Notes</label>
-              <textarea value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} rows={3} placeholder="Requirements, payment terms, relationship notes..." />
+              <label>Core Details</label>
+              <textarea
+                value={form.core_details}
+                onChange={e => setForm({ ...form, core_details: e.target.value })}
+                rows={4}
+                placeholder="Requirements, specifications, relationship notes..."
+              />
             </div>
           </div>
           <div className="modal-footer">

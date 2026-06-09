@@ -1,9 +1,14 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../supabaseClient";
 
-const RANK = r => r >= 4.5 ? "A" : r >= 3.5 ? "B" : r >= 2.5 ? "C" : "D";
-const RANK_CLASS = r => ({ A: "rank-a", B: "rank-b", C: "rank-c", D: "rank-d" })[RANK(r)];
-const fmt = n => n ? "$" + Number(n).toLocaleString() : "—";
+const fmtValue = n => n ? "$" + Number(n).toLocaleString() : "—";
+
+const getPrices = v => {
+  const gp = v.grade_prices;
+  if (!gp) return {};
+  if (typeof gp === "string") { try { return JSON.parse(gp); } catch { return {}; } }
+  return gp;
+};
 
 export default function ProfilePanel({ entity, type, onBack, onEdit, onDelete }) {
   const [orders, setOrders] = useState([]);
@@ -12,6 +17,7 @@ export default function ProfilePanel({ entity, type, onBack, onEdit, onDelete })
 
   const initials = entity.name.split(" ").slice(0, 2).map(w => w[0]).join("").toUpperCase();
   const isVendor = type === "vendor";
+  const notesField = isVendor ? "offerings" : "core_details";
 
   useEffect(() => {
     async function fetchOrders() {
@@ -31,10 +37,12 @@ export default function ProfilePanel({ entity, type, onBack, onEdit, onDelete })
     if (!note.trim()) return;
     setSavingNote(true);
     const table = isVendor ? "vendors" : "customers";
-    const existing = entity.notes || "";
-    const updated = existing ? `${existing}\n\n[${new Date().toLocaleDateString()}] ${note}` : `[${new Date().toLocaleDateString()}] ${note}`;
-    await supabase.from(table).update({ notes: updated }).eq("id", entity.id);
-    entity.notes = updated;
+    const existing = entity[notesField] || "";
+    const updated = existing
+      ? `${existing}\n\n[${new Date().toLocaleDateString()}] ${note}`
+      : `[${new Date().toLocaleDateString()}] ${note}`;
+    await supabase.from(table).update({ [notesField]: updated }).eq("id", entity.id);
+    entity[notesField] = updated;
     setNote("");
     setSavingNote(false);
   }
@@ -42,6 +50,8 @@ export default function ProfilePanel({ entity, type, onBack, onEdit, onDelete })
   const totalOrders = orders.length;
   const totalValue = orders.reduce((s, o) => s + (o.value_usd || 0), 0);
   const totalMT = orders.reduce((s, o) => s + (o.quantity_mt || 0), 0);
+  const prices = isVendor ? getPrices(entity) : {};
+  const priceEntries = Object.entries(prices);
 
   return (
     <div className="page">
@@ -56,44 +66,113 @@ export default function ProfilePanel({ entity, type, onBack, onEdit, onDelete })
       <div className="profile-layout">
         <aside className="profile-sidebar">
           <div className="profile-card">
-            <div className={`profile-avatar ${isVendor ? "av-blue" : "av-green"}`}>{initials}</div>
+            <div className={`profile-avatar ${isVendor ? "av-orange" : "av-white"}`}>{initials}</div>
             <h2>{entity.name}</h2>
-            <span className={`rank-badge ${RANK_CLASS(entity.rating)}`} style={{ width: 32, height: 32, fontSize: 16 }}>{RANK(entity.rating)}</span>
-            <div className="stars">{"★".repeat(Math.round(entity.rating))}{"☆".repeat(5 - Math.round(entity.rating))} {entity.rating}</div>
-            <span className={`badge ${entity.status === "Active" ? "badge-green" : "badge-gray"}`}>{entity.status}</span>
+            {isVendor && entity.type && (
+              <span className="badge badge-blue">{entity.type}</span>
+            )}
           </div>
 
           <div className="info-card">
-            <div className="info-row"><span>Type</span><strong>{isVendor ? entity.type : entity.industry}</strong></div>
-            {isVendor && <div className="info-row"><span>Grade</span><code>{entity.grade || "—"}</code></div>}
-            <div className="info-row"><span>Country</span><strong>{entity.country || "—"}</strong></div>
-            {!isVendor && entity.annual_spend && <div className="info-row"><span>Annual spend</span><strong>{fmt(entity.annual_spend)}</strong></div>}
+            <div className="info-row">
+              <span>Location</span>
+              <strong>{entity.location || "—"}</strong>
+            </div>
+            {!isVendor && (
+              <>
+                <div className="info-row">
+                  <span>Grade desired</span>
+                  <code>{entity.grade_desired || "—"}</code>
+                </div>
+                <div className="info-row">
+                  <span>Order qty/yr</span>
+                  <strong>{entity.order_qty_yr ? Number(entity.order_qty_yr).toLocaleString() + " mt/yr" : "—"}</strong>
+                </div>
+                {entity.target_margin_pct != null && entity.target_margin_pct !== "" && (
+                  <div className="info-row">
+                    <span>Target margin</span>
+                    <strong>{entity.target_margin_pct}%</strong>
+                  </div>
+                )}
+              </>
+            )}
+            {isVendor && (
+              <>
+                <div className="info-row">
+                  <span>Grades offered</span>
+                  <strong>{entity.grades_offered || "—"}</strong>
+                </div>
+                <div className="info-row">
+                  <span>Available qty</span>
+                  <strong>{entity.available_order_qty ? Number(entity.available_order_qty).toLocaleString() + " mt" : "—"}</strong>
+                </div>
+                <div className="info-row">
+                  <span>Lead time</span>
+                  <strong>{entity.lead_time || "—"}</strong>
+                </div>
+              </>
+            )}
           </div>
+
+          {isVendor && priceEntries.length > 0 && (
+            <div className="info-card">
+              <p className="card-label">Prices by Grade</p>
+              {priceEntries.map(([g, p]) => (
+                <div key={g} className="info-row">
+                  <span><code>{g}</code></span>
+                  <strong>${Number(p).toLocaleString()}/mt</strong>
+                </div>
+              ))}
+            </div>
+          )}
 
           <div className="info-card">
             <p className="card-label">Contact</p>
-            <div className="info-row"><span>Name</span><strong>{entity.contact_name || "—"}</strong></div>
-            <div className="info-row"><span>Email</span><a href={`mailto:${entity.email}`}>{entity.email || "—"}</a></div>
-            <div className="info-row"><span>Phone</span><strong>{entity.phone || "—"}</strong></div>
+            <div className="info-row">
+              <span>Name</span>
+              <strong>{entity.contact_name || "—"}</strong>
+            </div>
+            <div className="info-row">
+              <span>Email</span>
+              <a href={`mailto:${entity.email}`}>{entity.email || "—"}</a>
+            </div>
+            <div className="info-row">
+              <span>Phone</span>
+              <strong>{entity.phone || "—"}</strong>
+            </div>
           </div>
         </aside>
 
         <div className="profile-main">
           <div className="metrics-row">
-            <div className="metric-card"><span className="metric-label">Orders</span><span className="metric-value">{totalOrders}</span></div>
-            <div className="metric-card"><span className="metric-label">Total value</span><span className="metric-value" style={{ fontSize: "18px" }}>{fmt(totalValue)}</span></div>
-            <div className="metric-card"><span className="metric-label">Volume (MT)</span><span className="metric-value">{totalMT.toLocaleString()}</span></div>
+            <div className="metric-card">
+              <span className="metric-label">Orders</span>
+              <span className="metric-value">{totalOrders}</span>
+            </div>
+            <div className="metric-card">
+              <span className="metric-label">Total value</span>
+              <span className="metric-value" style={{ fontSize: "18px" }}>{fmtValue(totalValue)}</span>
+            </div>
+            <div className="metric-card">
+              <span className="metric-label">Volume (MT)</span>
+              <span className="metric-value">{totalMT.toLocaleString()}</span>
+            </div>
           </div>
 
           <div className="info-card" style={{ marginBottom: "1rem" }}>
-            <p className="card-label">Notes</p>
-            {entity.notes ? (
-              <pre className="notes-text">{entity.notes}</pre>
+            <p className="card-label">{isVendor ? "Offerings" : "Core Details"}</p>
+            {entity[notesField] ? (
+              <pre className="notes-text">{entity[notesField]}</pre>
             ) : (
               <p style={{ color: "var(--text-muted)", fontSize: "13px" }}>No notes yet.</p>
             )}
             <div className="note-add">
-              <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} placeholder="Add a note..." />
+              <textarea
+                value={note}
+                onChange={e => setNote(e.target.value)}
+                rows={2}
+                placeholder="Add a note..."
+              />
               <button className="btn-primary" onClick={addNote} disabled={savingNote || !note.trim()}>
                 {savingNote ? "Saving..." : "Add note"}
               </button>
@@ -123,8 +202,12 @@ export default function ProfilePanel({ entity, type, onBack, onEdit, onDelete })
                       <td style={{ padding: "7px 0" }}>{isVendor ? o.customers?.name : o.vendors?.name}</td>
                       <td style={{ padding: "7px 0" }}><code>{o.grade}</code></td>
                       <td style={{ padding: "7px 0", textAlign: "right" }}>{o.quantity_mt || "—"}</td>
-                      <td style={{ padding: "7px 0", textAlign: "right" }}><strong>{fmt(o.value_usd)}</strong></td>
-                      <td style={{ padding: "7px 0" }}><span className={`badge ${o.status === "Delivered" ? "badge-green" : o.status === "Shipped" ? "badge-blue" : "badge-gray"}`}>{o.status}</span></td>
+                      <td style={{ padding: "7px 0", textAlign: "right" }}><strong>{fmtValue(o.value_usd)}</strong></td>
+                      <td style={{ padding: "7px 0" }}>
+                        <span className={`badge ${o.status === "Delivered" ? "badge-green" : o.status === "Shipped" ? "badge-blue" : "badge-gray"}`}>
+                          {o.status}
+                        </span>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
