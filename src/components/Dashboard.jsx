@@ -3,11 +3,15 @@ import { supabase } from "../supabaseClient";
 import Vendors from "./Vendors";
 import Customers from "./Customers";
 import Orders from "./Orders";
+import Pricing from "./Pricing";
+import QuoteCalculator from "./QuoteCalculator";
 
 const NAV = [
   { id: "vendors",   label: "Vendors",   icon: "" },
   { id: "customers", label: "Customers", icon: "" },
   { id: "orders",    label: "Orders",    icon: "" },
+  { id: "pricing",   label: "Pricing",   icon: "" },
+  { id: "quotes",    label: "Quote Calculator", icon: "" },
 ];
 
 export default function Dashboard({ session }) {
@@ -44,6 +48,8 @@ export default function Dashboard({ session }) {
         {tab === "vendors"   && <Vendors />}
         {tab === "customers" && <Customers />}
         {tab === "orders"    && <Orders />}
+        {tab === "pricing"   && <Pricing />}
+        {tab === "quotes"    && <QuoteCalculator />}
       </main>
     </div>
   );

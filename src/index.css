@@ -277,6 +277,71 @@ code { font-family: var(--mono); font-size: 12px; background: #1e1e1e; padding: 
 .metric-label { display: block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); margin-bottom: 6px; }
 .metric-value { display: block; font-size: 24px; font-weight: 600; letter-spacing: -0.02em; }
 
+/* ── Pricing tab ──────────────────────────────────────── */
+.grade-sections { display: flex; flex-direction: column; gap: 14px; }
+.grade-section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden; }
+.grade-section-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px; cursor: pointer; user-select: none;
+}
+.grade-section-header:hover { background: rgba(255,255,255,0.02); }
+.grade-section-title { display: flex; align-items: center; gap: 10px; }
+.grade-section-title code { font-size: 13px; }
+.collapse-arrow { color: var(--text-muted); font-size: 11px; width: 10px; }
+
+.issues-banner {
+  margin: 0 16px 14px; padding: 10px 12px; background: var(--amber-light);
+  border: 1px solid #4a3a00; border-radius: var(--radius); color: var(--amber);
+  font-size: 12px; display: flex; flex-direction: column; gap: 4px;
+}
+
+.range-table { width: 100%; border-collapse: collapse; margin: 0 0 14px; }
+.range-table th {
+  padding: 8px 16px; text-align: left; font-size: 10px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--text-muted); background: transparent; border-bottom: 1px solid var(--border);
+}
+.range-table td { padding: 9px 16px; border-bottom: 0.5px solid var(--border); }
+.range-table tr:last-child td { border-bottom: none; }
+.range-table tbody tr:hover td { background: #1a1a1a; }
+.margin-negative { color: var(--red); }
+
+/* ── Quote Calculator ─────────────────────────────────── */
+.cart-layout { display: grid; grid-template-columns: 300px 1fr; gap: 20px; align-items: flex-start; }
+.item-picker { display: flex; flex-direction: column; gap: 12px; }
+.item-picker .field-group { gap: 5px; }
+.price-preview { font-size: 12px; color: var(--accent); background: var(--accent-light); padding: 8px 10px; border-radius: var(--radius); }
+.price-preview-warn { color: var(--amber); background: var(--amber-light); }
+
+.recent-quotes-list { display: flex; flex-direction: column; gap: 6px; }
+.recent-quote-row {
+  display: flex; flex-direction: column; gap: 2px; text-align: left;
+  background: #0f0f0f; border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 8px 10px; cursor: pointer; font-family: var(--font); color: var(--text);
+  transition: all 0.15s;
+}
+.recent-quote-row:hover { border-color: var(--border-strong); background: #1a1a1a; }
+.recent-quote-meta { font-size: 11px; color: var(--text-muted); }
+
+.cart-panel { display: flex; flex-direction: column; }
+.quote-total-row {
+  display: flex; justify-content: flex-end; align-items: center; gap: 14px;
+  padding: 14px 4px 0; font-size: 14px;
+}
+.quote-total-row strong { font-size: 20px; }
+
+.print-header { display: none; }
+@media print {
+  .no-print { display: none !important; }
+  .print-header { display: block; margin-bottom: 20px; }
+  .print-header h1 { font-size: 18px; margin-bottom: 4px; }
+  .print-header p { font-size: 12px; color: #555; }
+  .quote-summary-page { padding: 0; }
+  body { background: #fff; color: #000; }
+  .table-wrap { border-color: #ccc; }
+  th { background: #fff !important; color: #000 !important; }
+  td { color: #000; }
+}
+
 /* ── Profile panel ────────────────────────────────────── */
 .profile-topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
 .profile-actions { display: flex; gap: 8px; }
