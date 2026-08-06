@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 //
-// One-time / rerunnable importer: pricing spreadsheet -> pricing_points table.
+// One-time / rerunnable importer: pricing spreadsheet -> pricing_grades table.
 //
 // Usage:
 //   SUPABASE_SERVICE_ROLE_KEY=xxxx node scripts/import-pricing.js path/to/pricing.xlsx
@@ -8,18 +8,21 @@
 //
 // Get SUPABASE_SERVICE_ROLE_KEY from the Supabase dashboard -> Settings ->
 // API -> service_role. It bypasses RLS, so this script can write to
-// pricing_points without needing a logged-in browser session. Never commit
+// pricing_grades without needing a logged-in browser session. Never commit
 // this key or put it in a file tracked by git.
 //
 // Expects a "Pricing" sheet with columns: Grade, Width (in), Cost/lb ($),
-// Selling Price/lb ($). One row per (grade, width) cell — every row is kept
-// exactly as sampled, no collapsing into ranges. Rows with a blank Cost/lb
-// or Selling Price/lb are imported with a null base value ("no cost set" in
-// the UI) rather than being skipped or defaulted to 0.
+// Selling Price/lb ($). Cost/lb and Selling Price/lb do not vary by width
+// in the source data (every width row for a grade carries the same
+// value), so the Width column is read but otherwise ignored — this script
+// collapses to one row per Grade, taking the first non-null cost/price
+// seen for that grade. A grade with no cost/price rows at all is imported
+// with a null base value ("no cost set" in the UI) rather than being
+// skipped or defaulted to 0.
 //
-// Re-running this script UPSERTS on (grade, width): it only ever writes
-// base_cost_per_lb / base_selling_price_per_lb, so adjustment_per_lb values
-// already entered on the Pricing tab are left untouched.
+// Re-running this script UPSERTS on grade: it only ever writes
+// base_cost_per_lb / base_selling_price_per_lb, so adjustment_per_lb
+// values already entered on the Pricing tab are left untouched.
 
 const path = require("path");
 const XLSX = require("xlsx");
@@ -28,7 +31,7 @@ const { createClient } = require("@supabase/supabase-js");
 const SUPABASE_URL = process.env.SUPABASE_URL || "https://grzvxlitfdadezrourpk.supabase.co";
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-const round4 = n => (n == null ? null : Math.round(Number(n) * 10000) / 10000);
+const round4 = n => (n == null || n === "" ? null : Math.round(Number(n) * 10000) / 10000);
 
 // Shared with the in-app importer in src/components/Pricing.jsx — keep the
 // column names and null handling in sync if the spreadsheet format changes.
@@ -40,20 +43,25 @@ function parseSpreadsheet(filePath) {
   }
   const rows = XLSX.utils.sheet_to_json(sheet, { defval: null });
 
-  const points = [];
+  const byGrade = new Map();
   for (const row of rows) {
     const grade = row["Grade"];
-    const width = row["Width (in)"];
-    if (!grade || width == null) continue;
-    points.push({
-      grade: String(grade).trim(),
-      width: Math.round(Number(width) * 10) / 10,
-      base_cost_per_lb: round4(row["Cost/lb ($)"]),
-      base_selling_price_per_lb: round4(row["Selling Price/lb ($)"]),
-      updated_at: new Date().toISOString(),
-    });
+    if (!grade) continue;
+    const g = String(grade).trim();
+    const cost = round4(row["Cost/lb ($)"]);
+    const price = round4(row["Selling Price/lb ($)"]);
+    if (!byGrade.has(g)) byGrade.set(g, { cost: null, price: null });
+    const entry = byGrade.get(g);
+    if (entry.cost == null && cost != null) entry.cost = cost;
+    if (entry.price == null && price != null) entry.price = price;
   }
-  return points;
+
+  return [...byGrade.entries()].map(([grade, v]) => ({
+    grade,
+    base_cost_per_lb: v.cost,
+    base_selling_price_per_lb: v.price,
+    updated_at: new Date().toISOString(),
+  }));
 }
 
 async function main() {
@@ -74,38 +82,37 @@ async function main() {
     process.exit(1);
   }
 
-  const points = parseSpreadsheet(filePath);
-  if (points.length === 0) {
+  const grades = parseSpreadsheet(filePath);
+  if (grades.length === 0) {
     console.error("No usable rows found in the Pricing sheet.");
     process.exit(1);
   }
 
-  const missing = points.filter(p => p.base_cost_per_lb == null || p.base_selling_price_per_lb == null);
-  const grades = [...new Set(points.map(p => p.grade))];
+  const missing = grades.filter(g => g.base_cost_per_lb == null || g.base_selling_price_per_lb == null);
 
-  console.log(`Parsed ${points.length} row(s) across ${grades.length} grade(s) from "${path.basename(filePath)}":`);
-  console.log(`  ${points.length - missing.length} with both cost + price set`);
+  console.log(`Parsed ${grades.length} grade(s) from "${path.basename(filePath)}":`);
+  console.log(`  ${grades.length - missing.length} with both cost + price set`);
   console.log(`  ${missing.length} with no cost set (imported as null, not $0)`);
+  for (const g of grades) {
+    const cost = g.base_cost_per_lb == null ? "—" : `$${g.base_cost_per_lb.toFixed(4)}`;
+    const price = g.base_selling_price_per_lb == null ? "—" : `$${g.base_selling_price_per_lb.toFixed(4)}`;
+    console.log(`    ${g.grade}   cost ${cost}/lb   sell ${price}/lb`);
+  }
 
   if (dryRun) {
-    console.log("\n--dry-run set: nothing was written to Supabase. Sample rows:");
-    for (const p of points.slice(0, 10)) {
-      const cost = p.base_cost_per_lb == null ? "—" : `$${p.base_cost_per_lb.toFixed(4)}`;
-      const price = p.base_selling_price_per_lb == null ? "—" : `$${p.base_selling_price_per_lb.toFixed(4)}`;
-      console.log(`    ${p.grade}  ${p.width.toFixed(1)}"   cost ${cost}/lb   sell ${price}/lb`);
-    }
+    console.log("\n--dry-run set: nothing was written to Supabase.");
     return;
   }
 
   const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
 
-  console.log(`\nUpserting ${points.length} (grade, width) rows into pricing_points...`);
+  console.log(`\nUpserting ${grades.length} grade row(s) into pricing_grades...`);
   console.log("(adjustment_per_lb is not part of this payload, so existing adjustments are preserved)");
   const { error } = await supabase
-    .from("pricing_points")
-    .upsert(points, { onConflict: "grade,width" });
+    .from("pricing_grades")
+    .upsert(grades, { onConflict: "grade" });
   if (error) {
-    console.error("Failed to upsert pricing_points:", error.message);
+    console.error("Failed to upsert pricing_grades:", error.message);
     process.exit(1);
   }
 

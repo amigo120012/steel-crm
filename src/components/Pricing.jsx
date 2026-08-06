@@ -3,20 +3,22 @@ import * as XLSX from "xlsx";
 import { supabase } from "../supabaseClient";
 import {
   GRADES,
-  WIDTHS,
-  findPricingPoint,
+  findPricingGrade,
   hasBasePrice,
   finalSellingPrice,
   marginPerLb,
-  gradeCoverage,
 } from "../lib/pricing";
 
 const fmt$ = n => "$" + Number(n).toFixed(4);
 const fmtAdj = n => (Number(n) >= 0 ? "+$" + Number(n).toFixed(4) : "-$" + Math.abs(Number(n)).toFixed(4));
 
 // Parses the "Pricing" sheet of an uploaded spreadsheet into one row per
-// (grade, width) cell. Rows with a blank cost or price keep those fields
-// null ("no cost set") instead of being skipped or defaulted to 0.
+// Grade. Cost/lb and Selling Price/lb do not vary by width in the source
+// data (confirmed: every width row for a grade carries the same value), so
+// the Width column is read but otherwise ignored — we just take the first
+// non-null cost/price seen for each grade. A grade with no cost/price rows
+// at all keeps both fields null ("no cost set") instead of being skipped
+// or defaulted to 0.
 // Kept in sync with the column names scripts/import-pricing.js expects.
 async function parsePricingWorkbook(file) {
   const buf = await file.arrayBuffer();
@@ -26,38 +28,45 @@ async function parsePricingWorkbook(file) {
     throw new Error(`Sheet "Pricing" not found (sheets in file: ${wb.SheetNames.join(", ")})`);
   }
   const rows = XLSX.utils.sheet_to_json(sheet, { defval: null });
-  const round4 = n => (n == null ? null : Math.round(Number(n) * 10000) / 10000);
+  const round4 = n => (n == null || n === "" ? null : Math.round(Number(n) * 10000) / 10000);
 
-  const points = [];
+  const byGrade = new Map();
   for (const row of rows) {
     const grade = row["Grade"];
-    const width = row["Width (in)"];
-    if (!grade || width == null) continue;
-    points.push({
-      grade: String(grade).trim(),
-      width: Math.round(Number(width) * 10) / 10,
-      base_cost_per_lb: round4(row["Cost/lb ($)"]),
-      base_selling_price_per_lb: round4(row["Selling Price/lb ($)"]),
-      updated_at: new Date().toISOString(),
-    });
+    if (!grade) continue;
+    const g = String(grade).trim();
+    const cost = round4(row["Cost/lb ($)"]);
+    const price = round4(row["Selling Price/lb ($)"]);
+    if (!byGrade.has(g)) byGrade.set(g, { cost: null, price: null });
+    const entry = byGrade.get(g);
+    if (entry.cost == null && cost != null) entry.cost = cost;
+    if (entry.price == null && price != null) entry.price = price;
   }
-  return points;
+
+  return [...byGrade.entries()].map(([grade, v]) => ({
+    grade,
+    base_cost_per_lb: v.cost,
+    base_selling_price_per_lb: v.price,
+    updated_at: new Date().toISOString(),
+  }));
 }
 
 export default function Pricing() {
-  const [points, setPoints] = useState([]);
+  const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [editing, setEditing] = useState(null); // { id, value }
-  const [collapsed, setCollapsed] = useState(new Set());
   const [importing, setImporting] = useState(false);
   const fileInputRef = useRef(null);
 
-  useEffect(() => { fetchPoints(); }, []);
+  useEffect(() => { fetchGrades(); }, []);
 
-  async function fetchPoints() {
+  async function fetchGrades() {
     setLoading(true);
-    const { data } = await supabase.from("pricing_points").select("*").order("grade").order("width");
-    setPoints(data || []);
+    setError(null);
+    const { data, error } = await supabase.from("pricing_grades").select("*");
+    if (error) setError(error.message);
+    setRows(data || []);
     setLoading(false);
   }
 
@@ -71,21 +80,17 @@ export default function Pricing() {
     const { id, value } = editing;
     const adjustment = value !== "" ? Number(value) : 0;
     setEditing(null);
-    setPoints(ps => ps.map(p => (p.id === id ? { ...p, adjustment_per_lb: adjustment } : p)));
-    await supabase.from("pricing_points").update({ adjustment_per_lb: adjustment, updated_at: new Date().toISOString() }).eq("id", id);
+    setRows(rs => rs.map(r => (r.id === id ? { ...r, adjustment_per_lb: adjustment } : r)));
+    const { error } = await supabase
+      .from("pricing_grades")
+      .update({ adjustment_per_lb: adjustment, updated_at: new Date().toISOString() })
+      .eq("id", id);
+    if (error) alert("Failed to save adjustment: " + error.message);
   }
 
   function handleInlineKey(e) {
     if (e.key === "Enter") { e.preventDefault(); saveInline(); }
     if (e.key === "Escape") setEditing(null);
-  }
-
-  function toggleCollapsed(grade) {
-    setCollapsed(s => {
-      const ns = new Set(s);
-      ns.has(grade) ? ns.delete(grade) : ns.add(grade);
-      return ns;
-    });
   }
 
   function triggerImport() {
@@ -105,46 +110,40 @@ export default function Pricing() {
       return;
     }
     if (parsed.length === 0) {
-      alert('No usable rows found. Expected a "Pricing" sheet with Grade, Width (in), Cost/lb ($), Selling Price/lb ($) columns.');
+      alert('No usable rows found. Expected a "Pricing" sheet with Grade, Cost/lb ($), Selling Price/lb ($) columns.');
       return;
     }
 
     const missing = parsed.filter(p => p.base_cost_per_lb == null || p.base_selling_price_per_lb == null);
     const ok = confirm(
-      `Import ${parsed.length} grade/width row(s) from "${file.name}"?\n\n` +
-      `${parsed.length - missing.length} row(s) have both cost + price set, ${missing.length} have no cost set ` +
+      `Import ${parsed.length} grade(s) from "${file.name}"?\n\n` +
+      `${parsed.length - missing.length} grade(s) have both cost + price set, ${missing.length} have no cost set ` +
       `(kept as "no cost set", not $0).\n\n` +
-      `This overwrites Base Cost/lb and Base Selling Price/lb for matching Grade + Width. Adjustments already entered are not touched.`
+      `This overwrites Base Cost/lb and Base Selling Price/lb for matching grades. Adjustments already entered are not touched.`
     );
     if (!ok) return;
 
     setImporting(true);
-    const { error } = await supabase.from("pricing_points").upsert(parsed, { onConflict: "grade,width" });
+    const { error } = await supabase.from("pricing_grades").upsert(parsed, { onConflict: "grade" });
     setImporting(false);
     if (error) { alert("Import failed: " + error.message); return; }
 
-    await fetchPoints();
-    alert(`Imported ${parsed.length} row(s).`);
+    await fetchGrades();
+    alert(`Imported ${parsed.length} grade(s).`);
   }
 
-  // Build the full Grade x Width matrix — cells not yet imported render as
-  // "no cost set" rather than being omitted.
-  const grouped = GRADES.map(grade => {
-    const rows = WIDTHS.map(width => findPricingPoint(points, grade, width) || { grade, width, base_cost_per_lb: null, base_selling_price_per_lb: null, adjustment_per_lb: 0, id: null });
-    return { grade, rows, coverage: gradeCoverage(points, grade) };
-  });
-
-  const totalCells = GRADES.length * WIDTHS.length;
-  const pricedCells = points.filter(hasBasePrice).length;
+  // One row per known grade — grades not yet imported render as "no cost set".
+  const gradeRows = GRADES.map(grade =>
+    findPricingGrade(rows, grade) || { grade, base_cost_per_lb: null, base_selling_price_per_lb: null, adjustment_per_lb: 0, id: null }
+  );
+  const pricedCount = gradeRows.filter(hasBasePrice).length;
 
   return (
     <div className="page">
       <div className="page-header">
         <div>
           <h1>Pricing</h1>
-          <p className="page-sub">
-            {pricedCells}/{totalCells} grade × width cells priced across {GRADES.length} grades ({WIDTHS[0].toFixed(1)}"–{WIDTHS[WIDTHS.length - 1].toFixed(1)}")
-          </p>
+          <p className="page-sub">{pricedCount}/{GRADES.length} grades priced</p>
         </div>
         <div className="header-actions">
           <input
@@ -155,100 +154,83 @@ export default function Pricing() {
             onChange={handleImportFile}
           />
           <button className="btn-outline" onClick={triggerImport} disabled={importing}>
-            {importing ? "Importing..." : "↑ Import base pricing"}
+            {importing ? "Importing..." : "↑ Upload Pricing Sheet"}
           </button>
         </div>
       </div>
 
+      {error && (
+        <div className="issues-banner" style={{ margin: "0 0 16px" }}>
+          ⚠ Couldn't load pricing: {error}. Make sure the pricing_grades table has been created
+          (run supabase/pricing_and_quotes.sql in the Supabase SQL editor), then reload this tab.
+        </div>
+      )}
+
       {loading ? (
         <div className="loading-inline">Loading...</div>
       ) : (
-        <div className="grade-sections">
-          {grouped.map(({ grade, rows, coverage }) => {
-            const isCollapsed = collapsed.has(grade);
-            return (
-              <div className="grade-section" key={grade}>
-                <div className="grade-section-header" onClick={() => toggleCollapsed(grade)}>
-                  <div className="grade-section-title">
-                    <span className="collapse-arrow">{isCollapsed ? "▸" : "▾"}</span>
-                    <code>{grade}</code>
-                    {coverage.priced === 0 ? (
-                      <span className="badge badge-gray">No base cost set</span>
-                    ) : coverage.priced === coverage.total ? (
-                      <span className="badge badge-green">✓ all {coverage.total} widths priced</span>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Grade</th>
+                <th>Base Cost/lb</th>
+                <th>Base Selling Price/lb</th>
+                <th>Adjustment ($/lb)</th>
+                <th>Final Selling Price/lb</th>
+                <th>Margin/lb</th>
+              </tr>
+            </thead>
+            <tbody>
+              {gradeRows.map(r => {
+                const priced = hasBasePrice(r);
+                const finalPrice = finalSellingPrice(r);
+                const margin = marginPerLb(r);
+                return (
+                  <tr key={r.grade}>
+                    <td><code>{r.grade}</code></td>
+                    {priced ? (
+                      <>
+                        <td>{fmt$(r.base_cost_per_lb)}</td>
+                        <td>{fmt$(r.base_selling_price_per_lb)}</td>
+                        <td
+                          className="editable-cell"
+                          onClick={e => startEdit(e, r.id, r.adjustment_per_lb)}
+                          title="Click to edit"
+                        >
+                          {editing?.id === r.id ? (
+                            <input
+                              className="inline-input"
+                              type="number" step="0.0001"
+                              autoFocus
+                              value={editing.value}
+                              onChange={e => setEditing(ed => ({ ...ed, value: e.target.value }))}
+                              onBlur={saveInline}
+                              onKeyDown={handleInlineKey}
+                            />
+                          ) : (
+                            <span>{fmtAdj(r.adjustment_per_lb)}</span>
+                          )}
+                        </td>
+                        <td><strong>{fmt$(finalPrice)}</strong></td>
+                        <td>
+                          <span className={margin >= 0 ? "" : "margin-negative"}>{fmt$(margin)}</span>
+                        </td>
+                      </>
                     ) : (
-                      <span className="badge badge-orange">{coverage.priced}/{coverage.total} widths priced</span>
+                      <>
+                        <td className="placeholder-text">no cost set</td>
+                        <td className="placeholder-text">no cost set</td>
+                        <td className="placeholder-text">—</td>
+                        <td className="placeholder-text">—</td>
+                        <td className="placeholder-text">—</td>
+                      </>
                     )}
-                  </div>
-                </div>
-
-                {!isCollapsed && (
-                  <table className="range-table">
-                    <thead>
-                      <tr>
-                        <th>Width (in)</th>
-                        <th>Base Cost/lb</th>
-                        <th>Base Selling Price/lb</th>
-                        <th>Adjustment ($/lb)</th>
-                        <th>Final Selling Price/lb</th>
-                        <th>Margin/lb</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rows.map(r => {
-                        const priced = hasBasePrice(r);
-                        const finalPrice = finalSellingPrice(r);
-                        const margin = marginPerLb(r);
-                        const rowKey = `${r.grade}-${r.width}`;
-                        return (
-                          <tr key={rowKey}>
-                            <td>{Number(r.width).toFixed(1)}"</td>
-                            {priced ? (
-                              <>
-                                <td>{fmt$(r.base_cost_per_lb)}</td>
-                                <td>{fmt$(r.base_selling_price_per_lb)}</td>
-                                <td
-                                  className="editable-cell"
-                                  onClick={e => startEdit(e, r.id, r.adjustment_per_lb)}
-                                  title="Click to edit"
-                                >
-                                  {editing?.id === r.id ? (
-                                    <input
-                                      className="inline-input"
-                                      type="number" step="0.0001"
-                                      autoFocus
-                                      value={editing.value}
-                                      onChange={e => setEditing(ed => ({ ...ed, value: e.target.value }))}
-                                      onBlur={saveInline}
-                                      onKeyDown={handleInlineKey}
-                                    />
-                                  ) : (
-                                    <span>{fmtAdj(r.adjustment_per_lb)}</span>
-                                  )}
-                                </td>
-                                <td><strong>{fmt$(finalPrice)}</strong></td>
-                                <td>
-                                  <span className={margin >= 0 ? "" : "margin-negative"}>{fmt$(margin)}</span>
-                                </td>
-                              </>
-                            ) : (
-                              <>
-                                <td className="placeholder-text">no cost set</td>
-                                <td className="placeholder-text">no cost set</td>
-                                <td className="placeholder-text">—</td>
-                                <td className="placeholder-text">—</td>
-                                <td className="placeholder-text">—</td>
-                              </>
-                            )}
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            );
-          })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       )}
     </div>
