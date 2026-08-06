@@ -2,36 +2,52 @@
 -- Run this in Supabase → SQL Editor. Adjust the RLS policies below if your
 -- customers/vendors/orders tables use a different access pattern.
 
--- ── pricing_ranges ──────────────────────────────────────────────
--- Cost/price per grade, broken into non-overlapping width ranges.
--- Full coverage per grade is validated client-side (1.0"–12.0", no gaps/overlaps).
-create table if not exists pricing_ranges (
+-- ── pricing_points ──────────────────────────────────────────────
+-- Cost/price keyed on the exact (grade, width) pair, matching the source
+-- pricing spreadsheet 1:1 (11 grades x 23 widths, 1.0"–12.0" in 0.5" steps).
+--
+-- base_cost_per_lb / base_selling_price_per_lb are reference data imported
+-- from the spreadsheet (nullable — a grade/width the spreadsheet has no
+-- price for stays null, shown as "no cost set" in the UI, never $0).
+-- adjustment_per_lb is a separate, independently-editable field so
+-- re-importing the spreadsheet only refreshes the two base_* columns and
+-- never wipes out adjustments already made.
+--
+-- Final selling price = base_selling_price_per_lb + adjustment_per_lb
+-- Margin                = final selling price - base_cost_per_lb
+-- (both computed client-side; nothing to store for them here)
+create table if not exists pricing_points (
   id uuid primary key default gen_random_uuid(),
   grade text not null,
-  width_min numeric(5,1) not null,
-  width_max numeric(5,1) not null,
-  cost_per_lb numeric(10,4) not null default 0,
-  selling_price_per_lb numeric(10,4) not null default 0,
-  created_at timestamptz not null default now(),
-  constraint pricing_ranges_width_check check (width_min <= width_max)
+  width numeric(4,1) not null,
+  base_cost_per_lb numeric(10,4),
+  base_selling_price_per_lb numeric(10,4),
+  adjustment_per_lb numeric(10,4) not null default 0,
+  updated_at timestamptz not null default now(),
+  unique (grade, width)
 );
 
-create index if not exists pricing_ranges_grade_idx on pricing_ranges (grade, width_min);
+create index if not exists pricing_points_grade_idx on pricing_points (grade, width);
 
-alter table pricing_ranges enable row level security;
+alter table pricing_points enable row level security;
 
-create policy "authenticated read pricing_ranges" on pricing_ranges
+create policy "authenticated read pricing_points" on pricing_points
   for select to authenticated using (true);
-create policy "authenticated write pricing_ranges" on pricing_ranges
+create policy "authenticated write pricing_points" on pricing_points
   for insert to authenticated with check (true);
-create policy "authenticated update pricing_ranges" on pricing_ranges
+create policy "authenticated update pricing_points" on pricing_points
   for update to authenticated using (true);
-create policy "authenticated delete pricing_ranges" on pricing_ranges
+create policy "authenticated delete pricing_points" on pricing_points
   for delete to authenticated using (true);
 
--- No rows are seeded here — the 11 grades (M45, M36, M27, M19, M15, M12, M6,
--- M5, M4, M3, M2) are hardcoded in src/lib/pricing.js and always shown as
--- empty sections in the Pricing tab until ranges are added for each.
+-- No rows are seeded here — import the pricing spreadsheet (Pricing tab
+-- "Import base pricing" button, or scripts/import-pricing.js) to populate
+-- the 253 grade/width cells. Re-importing later only refreshes base_* —
+-- adjustment_per_lb is untouched.
+
+-- Migrating from the old range-based model? Drop the superseded table
+-- after confirming nothing else still reads from it:
+--   drop table if exists pricing_ranges;
 
 -- ── quotes ──────────────────────────────────────────────────────
 create table if not exists quotes (

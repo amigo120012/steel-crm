@@ -1,54 +1,56 @@
-// Shared grade/width-range logic used by both the Pricing tab and the
+// Shared grade/width pricing logic used by both the Pricing tab and the
 // Quote Calculator. Kept out of either component so Pricing.jsx can be
 // gated behind an employee-only check later without touching this file.
+//
+// Pricing is keyed on the exact pair (grade, width), not a range — the
+// source spreadsheet gives real cost/price data per 0.5" width sample, and
+// we keep that granularity end-to-end rather than collapsing it.
 
 export const GRADES = ["M45", "M36", "M27", "M19", "M15", "M12", "M6", "M5", "M4", "M3", "M2"];
 
 export const SPAN_MIN = 1.0;
 export const SPAN_MAX = 12.0;
+export const WIDTH_STEP = 0.5;
 
-// Widths are handled in tenths (integers) internally to avoid floating-point
-// drift when checking 0.1" increments for adjacency/overlap.
+// The 23 sampled widths: 1.0", 1.5", ... 12.0".
+export const WIDTHS = Array.from(
+  { length: Math.round((SPAN_MAX - SPAN_MIN) / WIDTH_STEP) + 1 },
+  (_, i) => Math.round((SPAN_MIN + i * WIDTH_STEP) * 10) / 10
+);
+
+// Widths are compared in tenths (integers) to avoid floating-point drift.
 const toTenths = n => Math.round(Number(n) * 10);
-const fmtW = tenths => (tenths / 10).toFixed(1);
 
-export function validateGradeRanges(ranges) {
-  const sorted = [...ranges].sort((a, b) => a.width_min - b.width_min);
-  const issues = [];
-  let cursor = toTenths(SPAN_MIN);
-
-  for (const r of sorted) {
-    const min = toTenths(r.width_min);
-    const max = toTenths(r.width_max);
-    if (min > max) {
-      issues.push(`Invalid range ${r.width_min}"–${r.width_max}" (min after max)`);
-      continue;
-    }
-    if (min > cursor) {
-      issues.push(`Gap: ${fmtW(cursor)}"–${fmtW(min - 1)}" not covered`);
-    } else if (min < cursor) {
-      issues.push(`Overlap: ${fmtW(min)}"–${fmtW(Math.min(max, cursor - 1))}"`);
-    }
-    cursor = Math.max(cursor, max + 1);
-  }
-
-  const spanMaxTenths = toTenths(SPAN_MAX);
-  if (cursor <= spanMaxTenths) {
-    issues.push(`Gap: ${fmtW(cursor)}"–${fmtW(spanMaxTenths)}" not covered`);
-  }
-
-  return { complete: sorted.length > 0 && issues.length === 0, issues };
+// Finds the pricing point for an exact (grade, width) match, or null if
+// that cell hasn't been loaded (e.g. before the spreadsheet is imported).
+export function findPricingPoint(points, grade, width) {
+  const w = toTenths(width);
+  return points.find(p => p.grade === grade && toTenths(p.width) === w) || null;
 }
 
-// Finds the pricing range covering a specific width for a grade, or null
-// if that width isn't covered yet (e.g. range not filled in).
-export function findRangeForWidth(ranges, grade, width) {
-  const w = toTenths(width);
-  return (
-    ranges.find(
-      r => r.grade === grade && toTenths(r.width_min) <= w && w <= toTenths(r.width_max)
-    ) || null
-  );
+// A point only has usable pricing once both base values have been imported
+// from the spreadsheet. Either missing means "no cost set" — skip the
+// adjustment/margin math rather than treating it as $0.
+export function hasBasePrice(point) {
+  return point != null && point.base_cost_per_lb != null && point.base_selling_price_per_lb != null;
+}
+
+export function finalSellingPrice(point) {
+  if (!hasBasePrice(point)) return null;
+  return Number(point.base_selling_price_per_lb) + Number(point.adjustment_per_lb ?? 0);
+}
+
+export function marginPerLb(point) {
+  const sell = finalSellingPrice(point);
+  if (sell == null) return null;
+  return sell - Number(point.base_cost_per_lb);
+}
+
+// How many of a grade's 23 widths have base pricing loaded.
+export function gradeCoverage(points, grade) {
+  const gradePoints = points.filter(p => p.grade === grade);
+  const priced = gradePoints.filter(hasBasePrice).length;
+  return { priced, total: WIDTHS.length };
 }
 
 export const fmtCurrency = n =>

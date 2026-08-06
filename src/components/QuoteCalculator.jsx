@@ -1,14 +1,14 @@
 import { useState, useEffect, useMemo } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "../supabaseClient";
-import { GRADES, SPAN_MIN, SPAN_MAX, findRangeForWidth, fmtCurrency } from "../lib/pricing";
+import { GRADES, WIDTHS, findPricingPoint, hasBasePrice, finalSellingPrice, fmtCurrency } from "../lib/pricing";
 
 const fmt$ = n => "$" + Number(n ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 let tempIdCounter = 0;
 const nextTempId = () => `tmp-${++tempIdCounter}`;
 
 export default function QuoteCalculator() {
-  const [ranges, setRanges] = useState([]);
+  const [points, setPoints] = useState([]);
   const [customers, setCustomers] = useState([]);
   const [recentQuotes, setRecentQuotes] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -25,12 +25,12 @@ export default function QuoteCalculator() {
 
   async function fetchAll() {
     setLoading(true);
-    const [{ data: r }, { data: c }, { data: q }] = await Promise.all([
-      supabase.from("pricing_ranges").select("*"),
+    const [{ data: p }, { data: c }, { data: q }] = await Promise.all([
+      supabase.from("pricing_points").select("*"),
       supabase.from("customers").select("id, name").order("name"),
       supabase.from("quotes").select("*, customers(name)").order("created_at", { ascending: false }).limit(20),
     ]);
-    setRanges(r || []);
+    setPoints(p || []);
     setCustomers(c || []);
     setRecentQuotes(q || []);
     setLoading(false);
@@ -38,14 +38,14 @@ export default function QuoteCalculator() {
 
   const preview = useMemo(() => {
     if (!pickerGrade || pickerWidth === "") return null;
-    return findRangeForWidth(ranges, pickerGrade, Number(pickerWidth));
-  }, [ranges, pickerGrade, pickerWidth]);
+    return findPricingPoint(points, pickerGrade, Number(pickerWidth));
+  }, [points, pickerGrade, pickerWidth]);
 
   function addToCart() {
     const width = Number(pickerWidth);
     const qty = Number(pickerQty);
-    if (!pickerGrade || pickerWidth === "" || width < SPAN_MIN || width > SPAN_MAX || !qty || qty <= 0) return;
-    const match = findRangeForWidth(ranges, pickerGrade, width);
+    if (!pickerGrade || pickerWidth === "" || !qty || qty <= 0) return;
+    const match = findPricingPoint(points, pickerGrade, width);
     setCart(c => [
       ...c,
       {
@@ -53,7 +53,7 @@ export default function QuoteCalculator() {
         grade: pickerGrade,
         width,
         quantity: qty,
-        unit_price: match ? Number(match.selling_price_per_lb) : null,
+        unit_price: hasBasePrice(match) ? finalSellingPrice(match) : null,
       },
     ]);
     setPickerWidth("");
@@ -188,7 +188,7 @@ export default function QuoteCalculator() {
       <div className="page-header">
         <div>
           <h1>Quote Calculator</h1>
-          <p className="page-sub">Build a customer quote from live pricing ranges</p>
+          <p className="page-sub">Build a customer quote from live pricing</p>
         </div>
       </div>
 
@@ -205,13 +205,11 @@ export default function QuoteCalculator() {
               </select>
             </div>
             <div className="field-group">
-              <label>Width (in, {SPAN_MIN.toFixed(1)}"–{SPAN_MAX.toFixed(1)}")</label>
-              <input
-                type="number" step="0.1" min={SPAN_MIN} max={SPAN_MAX}
-                value={pickerWidth}
-                onChange={e => setPickerWidth(e.target.value)}
-                placeholder="e.g. 3.2"
-              />
+              <label>Width (in)</label>
+              <select value={pickerWidth} onChange={e => setPickerWidth(e.target.value)}>
+                <option value="">Select width...</option>
+                {WIDTHS.map(w => <option key={w} value={w}>{w.toFixed(1)}"</option>)}
+              </select>
             </div>
             <div className="field-group">
               <label>Quantity (lbs)</label>
@@ -224,12 +222,13 @@ export default function QuoteCalculator() {
             </div>
 
             {pickerWidth !== "" && (
-              preview ? (
+              hasBasePrice(preview) ? (
                 <div className="price-preview">
-                  {fmtCurrency(preview.selling_price_per_lb)} — matched {Number(preview.width_min).toFixed(1)}"–{Number(preview.width_max).toFixed(1)}" range
+                  {fmtCurrency(finalSellingPrice(preview))} — base {fmtCurrency(preview.base_selling_price_per_lb)}
+                  {Number(preview.adjustment_per_lb) !== 0 ? ` + adj $${Number(preview.adjustment_per_lb).toFixed(4)}` : ""}
                 </div>
               ) : (
-                <div className="price-preview price-preview-warn">⚠ Price not set for this width yet</div>
+                <div className="price-preview price-preview-warn">⚠ No cost set for this grade/width yet</div>
               )
             )}
 
@@ -237,7 +236,7 @@ export default function QuoteCalculator() {
               className="btn-primary"
               style={{ width: "100%", marginTop: 8 }}
               onClick={addToCart}
-              disabled={!pickerWidth || !pickerQty || Number(pickerWidth) < SPAN_MIN || Number(pickerWidth) > SPAN_MAX}
+              disabled={!pickerWidth || !pickerQty}
             >
               + Add to cart
             </button>
@@ -317,7 +316,7 @@ export default function QuoteCalculator() {
 
             {hasUnpriced && cart.length > 0 && (
               <div className="issues-banner" style={{ marginTop: 12 }}>
-                ⚠ One or more items have no price set for that width — fill in the range on the Pricing tab before generating the quote.
+                ⚠ One or more items have no cost set for that grade/width — import base pricing on the Pricing tab before generating the quote.
               </div>
             )}
 
