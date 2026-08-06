@@ -29,12 +29,16 @@ create table if not exists pricing_grades (
 
 alter table pricing_grades enable row level security;
 
+drop policy if exists "authenticated read pricing_grades" on pricing_grades;
 create policy "authenticated read pricing_grades" on pricing_grades
   for select to authenticated using (true);
+drop policy if exists "authenticated write pricing_grades" on pricing_grades;
 create policy "authenticated write pricing_grades" on pricing_grades
   for insert to authenticated with check (true);
+drop policy if exists "authenticated update pricing_grades" on pricing_grades;
 create policy "authenticated update pricing_grades" on pricing_grades
   for update to authenticated using (true);
+drop policy if exists "authenticated delete pricing_grades" on pricing_grades;
 create policy "authenticated delete pricing_grades" on pricing_grades
   for delete to authenticated using (true);
 
@@ -56,12 +60,16 @@ create table if not exists quotes (
 
 alter table quotes enable row level security;
 
+drop policy if exists "authenticated read quotes" on quotes;
 create policy "authenticated read quotes" on quotes
   for select to authenticated using (true);
+drop policy if exists "authenticated write quotes" on quotes;
 create policy "authenticated write quotes" on quotes
   for insert to authenticated with check (true);
+drop policy if exists "authenticated update quotes" on quotes;
 create policy "authenticated update quotes" on quotes
   for update to authenticated using (true);
+drop policy if exists "authenticated delete quotes" on quotes;
 create policy "authenticated delete quotes" on quotes
   for delete to authenticated using (true);
 
@@ -80,11 +88,15 @@ create index if not exists quote_line_items_quote_idx on quote_line_items (quote
 
 alter table quote_line_items enable row level security;
 
+drop policy if exists "authenticated read quote_line_items" on quote_line_items;
 create policy "authenticated read quote_line_items" on quote_line_items
   for select to authenticated using (true);
+drop policy if exists "authenticated write quote_line_items" on quote_line_items;
 create policy "authenticated write quote_line_items" on quote_line_items
   for insert to authenticated with check (true);
+drop policy if exists "authenticated update quote_line_items" on quote_line_items;
 create policy "authenticated update quote_line_items" on quote_line_items
   for update to authenticated using (true);
+drop policy if exists "authenticated delete quote_line_items" on quote_line_items;
 create policy "authenticated delete quote_line_items" on quote_line_items
   for delete to authenticated using (true);

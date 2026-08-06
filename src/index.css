@@ -342,6 +342,46 @@ code { font-family: var(--mono); font-size: 12px; background: #1e1e1e; padding: 
   td { color: #000; }
 }
 
+/* ── Public order page ───────────────────────────────── */
+.order-page {
+  min-height: 100vh; display: flex; flex-direction: column; align-items: center;
+  padding: 48px 20px; background: var(--bg);
+}
+.order-header { display: flex; align-items: center; gap: 10px; margin-bottom: 28px; }
+.order-brand-icon { font-size: 24px; color: var(--accent); }
+.order-brand-name { font-size: 17px; font-weight: 600; letter-spacing: 0.02em; color: #fff; }
+.order-shell { width: 100%; max-width: 520px; }
+.order-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  padding: 28px 26px;
+}
+.order-card h1 { font-size: 19px; font-weight: 600; }
+
+.order-estimate {
+  margin-top: 18px; padding: 16px; border-radius: var(--radius);
+  background: var(--accent-light); border: 1px solid #3a1d00; text-align: center;
+}
+.order-estimate-total { font-size: 28px; font-weight: 700; color: var(--accent); letter-spacing: -0.02em; }
+.order-estimate-sub { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+.order-summary-box {
+  background: #0f0f0f; border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px 16px; margin-bottom: 18px;
+}
+.order-summary-row { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; padding: 4px 0; }
+.order-summary-row span:first-child { color: var(--text-muted); }
+.order-summary-total { border-top: 1px solid var(--border); margin-top: 6px; padding-top: 10px !important; font-size: 15px; font-weight: 600; }
+.order-summary-total span { color: var(--text) !important; }
+
+.order-actions { display: flex; gap: 10px; margin-top: 22px; }
+.order-actions .btn-outline, .order-actions .btn-primary { flex: 1; }
+
+.order-confirm-icon {
+  width: 48px; height: 48px; border-radius: 50%; background: #0a2e1a; color: #4ade80;
+  display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: 700;
+  margin: 0 auto 14px;
+}
+
 /* ── Profile panel ────────────────────────────────────── */
 .profile-topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
 .profile-actions { display: flex; gap: 8px; }

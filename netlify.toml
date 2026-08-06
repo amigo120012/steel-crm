@@ -4,3 +4,10 @@
 
 [build.environment]
   NODE_VERSION = "20"
+
+# Single-page app: let client-side routing handle /order (the public order
+# form) instead of Netlify 404ing on a direct link/refresh.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
