@@ -39,6 +39,14 @@ create table if not exists quote_request_line_items (
   line_total numeric(12,2) not null
 );
 
+-- Company became required after the first version of this file shipped. The
+-- `create table if not exists` above is a no-op on a database that already
+-- ran that version, so retrofit the constraint explicitly. Both statements
+-- are idempotent and safe to re-run.
+update quote_requests set requester_company = '(not supplied)'
+  where requester_company is null or trim(requester_company) = '';
+alter table quote_requests alter column requester_company set not null;
+
 create index if not exists quote_requests_created_idx on quote_requests (created_at desc);
 create index if not exists quote_request_line_items_req_idx on quote_request_line_items (quote_request_id);
 
