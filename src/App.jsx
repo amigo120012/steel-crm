@@ -2,19 +2,28 @@ import { useState, useEffect } from "react";
 import { supabase } from "./supabaseClient";
 import Auth from "./components/Auth";
 import Dashboard from "./components/Dashboard";
-import OrderPage from "./components/OrderPage";
+import QuoteCalculator from "./components/QuoteCalculator";
+import logo from "./assets/logo.png";
 import "./index.css";
 
-// /order is a fully public route — no session check, no CRM data, no
-// sidebar. It renders standalone before anything else in this component.
-const isOrderRoute = typeof window !== "undefined" && window.location.pathname.replace(/\/+$/, "") === "/order";
+// There is no router in this app — routing is this one pathname check.
+//
+//   /  and  /order   → public customer RFQ page. No session check, no CRM
+//                      data, no nav into the internal app.
+//   /staff           → employee CRM, behind the existing Supabase auth.
+//
+// Anything unrecognised falls through to the PUBLIC page on purpose: a
+// stray or guessed link must never land a customer on the internal app.
+const path = typeof window !== "undefined" ? window.location.pathname.replace(/\/+$/, "") : "";
+const isStaffRoute = path === "/staff";
 
 export default function App() {
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (isOrderRoute) { setLoading(false); return; }
+    // Public visitors never hit Supabase auth at all.
+    if (!isStaffRoute) { setLoading(false); return; }
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setLoading(false);
@@ -25,11 +34,11 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  if (isOrderRoute) return <OrderPage />;
+  if (!isStaffRoute) return <QuoteCalculator publicMode />;
 
   if (loading) return (
     <div className="loading-screen">
-      <div className="loading-logo">⬡</div>
+      <img src={logo} alt="Phoenix Steel Supply Inc." className="brand-logo loading-logo-img" />
       <p>Loading...</p>
     </div>
   );

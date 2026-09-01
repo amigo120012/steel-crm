@@ -5,6 +5,7 @@ import Customers from "./Customers";
 import Orders from "./Orders";
 import Pricing from "./Pricing";
 import QuoteCalculator from "./QuoteCalculator";
+import logo from "../assets/logo.png";
 
 const NAV = [
   { id: "vendors",   label: "Vendors",   icon: "" },
@@ -21,8 +22,7 @@ export default function Dashboard({ session }) {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="sidebar-brand">
-          <span className="brand-icon">⬡</span>
-          <span className="brand-name">Phoenix.SS</span>
+          <img src={logo} alt="Phoenix Steel Supply Inc." className="brand-logo sidebar-brand-logo" />
         </div>
         <nav className="sidebar-nav">
           {NAV.map(n => (

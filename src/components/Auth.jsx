@@ -1,37 +1,31 @@
 import { useState } from "react";
 import { supabase } from "../supabaseClient";
+import logo from "../assets/logo.png";
+
+// Staff sign-in only. There is deliberately no sign-up path: this gate is the
+// boundary between the public RFQ page and the CRM, so accounts are created by
+// an admin in Supabase → Authentication → Users, never self-served.
 
 export default function Auth() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [mode, setMode] = useState("login"); // "login" | "signup"
-  const [success, setSuccess] = useState("");
 
   async function handleSubmit(e) {
     e.preventDefault();
     setLoading(true);
     setError("");
-    setSuccess("");
-
-    if (mode === "login") {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) setError(error.message);
-    } else {
-      const { error } = await supabase.auth.signUp({ email, password });
-      if (error) setError(error.message);
-      else setSuccess("Check your email to confirm your account.");
-    }
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) setError(error.message);
     setLoading(false);
   }
 
   return (
     <div className="auth-page">
       <div className="auth-card">
-        <div className="auth-logo">⬡</div>
-        <h1 className="auth-title">Phoenix.SS</h1>
-        <p className="auth-sub">Electric steel sales platform</p>
+        <img src={logo} alt="Phoenix Steel Supply Inc." className="brand-logo auth-logo-img" />
+        <p className="auth-sub">Staff sign-in · Electric steel sales platform</p>
 
         <form onSubmit={handleSubmit} className="auth-form">
           <div className="field-group">
@@ -55,18 +49,10 @@ export default function Auth() {
             />
           </div>
           {error && <p className="auth-error">{error}</p>}
-          {success && <p className="auth-success">{success}</p>}
           <button type="submit" className="btn-primary" disabled={loading}>
-            {loading ? "Please wait..." : mode === "login" ? "Sign in" : "Create account"}
+            {loading ? "Please wait..." : "Sign in"}
           </button>
         </form>
-
-        <p className="auth-toggle">
-          {mode === "login" ? "No account? " : "Have an account? "}
-          <button onClick={() => { setMode(mode === "login" ? "signup" : "login"); setError(""); }}>
-            {mode === "login" ? "Sign up" : "Sign in"}
-          </button>
-        </p>
       </div>
     </div>
   );

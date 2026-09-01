@@ -35,10 +35,9 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); font
   border-right: 1px solid var(--border);
 }
 .sidebar-brand {
-  display: flex; align-items: center; gap: 10px; padding: 20px 18px 18px;
+  display: flex; align-items: center; padding: 18px;
   border-bottom: 1px solid var(--border);
 }
-.brand-icon { font-size: 22px; color: var(--accent); }
 .brand-name { font-size: 15px; font-weight: 600; letter-spacing: 0.02em; color: #fff; }
 
 .sidebar-nav { flex: 1; padding: 12px 8px; display: flex; flex-direction: column; gap: 2px; }
@@ -252,7 +251,6 @@ code { font-family: var(--mono); font-size: 12px; background: #1e1e1e; padding: 
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius-lg); padding: 40px; width: 360px; text-align: center;
 }
-.auth-logo { font-size: 36px; margin-bottom: 8px; color: var(--accent); }
 .auth-title { font-size: 20px; font-weight: 600; margin-bottom: 4px; }
 .auth-sub { font-size: 13px; color: var(--text-muted); margin-bottom: 24px; }
 .auth-form { display: flex; flex-direction: column; gap: 14px; text-align: left; }
@@ -267,7 +265,6 @@ code { font-family: var(--mono); font-size: 12px; background: #1e1e1e; padding: 
   min-height: 100vh; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 12px; color: var(--text-muted);
 }
-.loading-logo { font-size: 40px; animation: pulse 1.5s ease-in-out infinite; color: var(--accent); }
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 .loading-inline { padding: 40px; text-align: center; color: var(--text-muted); }
 
@@ -408,3 +405,54 @@ code { font-family: var(--mono); font-size: 12px; background: #1e1e1e; padding: 
 .note-add { display: flex; gap: 8px; align-items: flex-end; margin-top: 12px; border-top: 0.5px solid var(--border); padding-top: 12px; }
 .note-add textarea { flex: 1; padding: 8px 10px; font-family: var(--font); font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius); resize: none; background: #0f0f0f; color: var(--text); }
 .note-add textarea:focus { outline: none; border-color: var(--accent); }
+
+/* ── Logo ───────────────────────────────────────── */
+/* logo.png is 266x150 with black lettering. Only `height` is ever set and
+   `width` stays auto, so the 266:150 ratio can't be squashed by a fixed-size
+   container; the white plate is what keeps the black wordmark legible
+   against this dark UI. */
+.brand-logo {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  object-fit: contain;
+  background: #fff;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+.sidebar-brand-logo { height: 46px; }
+.auth-logo-img { height: 52px; margin: 0 auto 16px; }
+.loading-logo-img { height: 48px; animation: pulse 1.5s ease-in-out infinite; }
+.public-brand-logo { height: 46px; }
+
+/* ── Public RFQ page shell ───────────────────────── */
+/* Wraps the quote builder when it renders standalone at / and /order. Wider
+   than the old single-grade order card because the cart layout needs room. */
+.public-page {
+  min-height: 100vh; display: flex; flex-direction: column; align-items: center;
+  padding: 36px 20px 64px; background: var(--bg);
+}
+.public-header { display: flex; align-items: center; justify-content: center; margin-bottom: 20px; }
+.public-shell { width: 100%; max-width: 1080px; }
+.public-shell .page { padding: 0; max-width: none; }
+
+/* A bare `1fr` track is minmax(auto, 1fr), so it refuses to shrink below its
+   content's min-content width — long placeholders and the 6-column cart table
+   were pushing the whole page into horizontal scroll on narrow screens. */
+.cart-layout { grid-template-columns: 300px minmax(0, 1fr); }
+.item-picker, .cart-panel { min-width: 0; }
+.cart-layout .field-group input,
+.cart-layout .field-group select { width: 100%; min-width: 0; }
+.cart-panel .table-wrap { overflow-x: auto; }
+
+.requester-fields {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+  max-width: 520px; margin-bottom: 16px;
+}
+
+@media (max-width: 780px) {
+  .cart-layout { grid-template-columns: minmax(0, 1fr); }
+  .requester-fields { grid-template-columns: minmax(0, 1fr); }
+  .public-page { padding: 24px 14px 48px; }
+  .page-header { flex-direction: column; gap: 12px; }
+}
