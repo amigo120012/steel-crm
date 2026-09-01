@@ -17,6 +17,11 @@
 --     dictate its own unit price. (Note: order_requests.sql's older
 --     submit_order_request() does trust the client-supplied price — worth
 --     tightening the same way if that form stays in use.)
+--
+--   * Company type-ahead goes through search_customers(), also SECURITY
+--     DEFINER. anon still has NO select grant on customers; that function is
+--     the only way a public visitor sees a company name, and it requires 3+
+--     characters and returns at most 8 prefix matches.
 
 -- ── quote_requests ───────────────────────────────────────────────
 create table if not exists quote_requests (
@@ -47,6 +52,12 @@ update quote_requests set requester_company = '(not supplied)'
   where requester_company is null or trim(requester_company) = '';
 alter table quote_requests alter column requester_company set not null;
 
+-- Nationality was added after the first version shipped. Stored per-RFQ (the
+-- record of what was actually submitted) and also seeded onto a customer the
+-- first time an RFQ creates one, so returning customers have it on file.
+alter table quote_requests add column if not exists nationality text;
+alter table customers      add column if not exists nationality text;
+
 create index if not exists quote_requests_created_idx on quote_requests (created_at desc);
 create index if not exists quote_request_line_items_req_idx on quote_request_line_items (quote_request_id);
 
@@ -75,17 +86,60 @@ drop policy if exists "authenticated delete quote_request_line_items" on quote_r
 create policy "authenticated delete quote_request_line_items" on quote_request_line_items
   for delete to authenticated using (true);
 
+-- ── search_customers() ──────────────────────────────────────────
+-- Powers the company type-ahead on the PUBLIC RFQ form.
+--
+-- anon deliberately has no select grant on customers. This is the only way a
+-- public visitor ever sees a company name, and it is narrowed on purpose:
+-- 3-character minimum, prefix match only (not substring), 8 rows maximum. That
+-- makes casual enumeration impractical without blocking a genuine customer
+-- typing their own company. It returns id + name and nothing else — no
+-- contacts, margins, volumes or notes.
+create or replace function search_customers(p_prefix text)
+returns table (id uuid, name text)
+language plpgsql
+security definer
+stable
+set search_path = public
+as $$
+begin
+  if p_prefix is null or length(trim(p_prefix)) < 3 then
+    return;
+  end if;
+
+  return query
+    select c.id, c.name
+    from customers c
+    where c.name ilike trim(p_prefix) || '%'
+    order by c.name
+    limit 8;
+end;
+$$;
+
+grant execute on function search_customers(text) to anon, authenticated;
+
 -- ── submit_quote_request() ───────────────────────────────────────
 -- p_lines is a JSON array of { grade, width, quantity }. Prices are NOT
 -- accepted from the client — each line is re-priced from pricing_grades
 -- using the same base + adjustment formula as pricing_public.
 --
--- Name and company are both required. The company name is the customer-record
--- key: matched case-insensitively against customers.name, and created if
--- nothing matches, the same behaviour as submit_order_request().
+-- Customer resolution, in order:
+--   1. p_customer_id given (the visitor picked a company from the type-ahead)
+--      -> link that customer, verifying it exists. Never renamed.
+--   2. otherwise match customers.name case-insensitively against the typed
+--      company -> link the match.
+--   3. otherwise create a customer with that name and nationality.
+--
+-- The old 3-argument version is dropped rather than left as an overload:
+-- PostgREST resolves by argument names, and two candidates would make the
+-- call ambiguous.
+drop function if exists submit_quote_request(text, text, jsonb);
+
 create or replace function submit_quote_request(
   p_requester_name text,
   p_requester_company text,
+  p_nationality text,
+  p_customer_id uuid,
   p_lines jsonb
 )
 returns uuid
@@ -113,6 +167,10 @@ begin
     raise exception 'Company is required';
   end if;
 
+  if coalesce(trim(p_nationality), '') = '' then
+    raise exception 'Nationality is required';
+  end if;
+
   if p_lines is null or jsonb_typeof(p_lines) <> 'array' then
     raise exception 'Line items must be a JSON array';
   end if;
@@ -126,22 +184,43 @@ begin
     raise exception 'Too many line items (max 50)';
   end if;
 
-  -- Company is required, so it is always the customer-record key.
   v_customer_name := trim(p_requester_company);
 
-  select id into v_customer_id
-  from customers
-  where lower(name) = lower(v_customer_name)
-  limit 1;
-
-  if v_customer_id is null then
-    insert into customers (name, location, grade_desired, contact_name, email, phone)
-    values (v_customer_name, '', '', trim(p_requester_name), '', '')
-    returning id into v_customer_id;
+  -- 1. Explicit pick from the type-ahead.
+  if p_customer_id is not null then
+    select c.id into v_customer_id from customers c where c.id = p_customer_id;
+    if v_customer_id is null then
+      raise exception 'Selected customer no longer exists';
+    end if;
   end if;
 
-  insert into quote_requests (customer_id, requester_name, requester_company, total)
-  values (v_customer_id, trim(p_requester_name), trim(p_requester_company), 0)
+  -- 2. Fall back to a case-insensitive name match.
+  if v_customer_id is null then
+    select c.id into v_customer_id
+    from customers c
+    where lower(c.name) = lower(v_customer_name)
+    limit 1;
+  end if;
+
+  -- 3. Still nothing: this is a new company.
+  if v_customer_id is null then
+    insert into customers (name, location, grade_desired, contact_name, email, phone, nationality)
+    values (v_customer_name, '', '', trim(p_requester_name), '', '', trim(p_nationality))
+    returning id into v_customer_id;
+  else
+    -- Seed nationality onto an existing customer only when it is still blank.
+    -- Never overwrite what staff have already curated.
+    update customers
+    set nationality = trim(p_nationality)
+    where id = v_customer_id
+      and (nationality is null or trim(nationality) = '');
+  end if;
+
+  insert into quote_requests (
+    customer_id, requester_name, requester_company, nationality, total
+  ) values (
+    v_customer_id, trim(p_requester_name), v_customer_name, trim(p_nationality), 0
+  )
   returning id into v_request_id;
 
   for v_line in select * from jsonb_array_elements(p_lines)
@@ -183,4 +262,4 @@ begin
 end;
 $$;
 
-grant execute on function submit_quote_request(text, text, jsonb) to anon, authenticated;
+grant execute on function submit_quote_request(text, text, text, uuid, jsonb) to anon, authenticated;

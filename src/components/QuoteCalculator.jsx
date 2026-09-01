@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "../supabaseClient";
 import { GRADES, fmtCurrency } from "../lib/pricing";
+import { COUNTRIES } from "../lib/countries";
 import logo from "../assets/logo.png";
 
 // The customer-facing Order/RFQ page. Rendered standalone and unauthenticated
@@ -28,6 +29,14 @@ export default function QuoteCalculator({ publicMode = false }) {
   const [cart, setCart] = useState([]);
   const [requesterName, setRequesterName] = useState("");
   const [requesterCompany, setRequesterCompany] = useState("");
+  const [nationality, setNationality] = useState("");
+  // Set only when the visitor picks a company off the type-ahead; cleared the
+  // moment they edit the text again, so a stale id can't be submitted with a
+  // name that no longer matches it.
+  const [matchedCustomerId, setMatchedCustomerId] = useState(null);
+  const [matches, setMatches] = useState([]);
+  const [showMatches, setShowMatches] = useState(false);
+  const [activeMatch, setActiveMatch] = useState(-1);
   const [pickerGrade, setPickerGrade] = useState("");
   const [pickerWidth, setPickerWidth] = useState("");
   const [pickerQty, setPickerQty] = useState("");
@@ -49,6 +58,46 @@ export default function QuoteCalculator({ publicMode = false }) {
     setGradePricing(rows);
     if (rows.length > 0) setPickerGrade(rows[0].grade);
     setLoading(false);
+  }
+
+  // ── Company type-ahead ────────────────────────────────
+  // search_customers() enforces the 3-char minimum and the row cap server-side;
+  // the guard here just avoids a pointless round trip on every keystroke.
+  useEffect(() => {
+    const q = requesterCompany.trim();
+    if (matchedCustomerId || q.length < 3) { setMatches([]); return; }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      const { data, error } = await supabase.rpc("search_customers", { p_prefix: q });
+      if (cancelled) return;
+      if (error) { console.error("search_customers failed:", error); setMatches([]); return; }
+      setMatches(data || []);
+      setActiveMatch(-1);
+      setShowMatches(true);
+    }, 200);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [requesterCompany, matchedCustomerId]);
+
+  function onCompanyChange(value) {
+    setRequesterCompany(value);
+    // Typing after a pick means they're naming a different company.
+    setMatchedCustomerId(null);
+  }
+
+  function pickCompany(m) {
+    setRequesterCompany(m.name);
+    setMatchedCustomerId(m.id);
+    setMatches([]);
+    setShowMatches(false);
+    setActiveMatch(-1);
+  }
+
+  function onCompanyKeyDown(e) {
+    if (!showMatches || matches.length === 0) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setActiveMatch(i => (i + 1) % matches.length); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActiveMatch(i => (i <= 0 ? matches.length : i) - 1); }
+    else if (e.key === "Enter" && activeMatch >= 0) { e.preventDefault(); pickCompany(matches[activeMatch]); }
+    else if (e.key === "Escape") { setShowMatches(false); setActiveMatch(-1); }
   }
 
   // Pricing is keyed on grade only — width is just a physical attribute of
@@ -91,7 +140,8 @@ export default function QuoteCalculator({ publicMode = false }) {
   const hasUnpriced = cart.some(l => l.unit_price == null);
   const subtotal = cart.reduce((s, l) => s + (l.unit_price != null ? l.quantity * l.unit_price : 0), 0);
   const canSubmit = cart.length > 0 && !hasUnpriced
-    && requesterName.trim() !== "" && requesterCompany.trim() !== "" && !submitting;
+    && requesterName.trim() !== "" && requesterCompany.trim() !== ""
+    && nationality !== "" && !submitting;
 
   async function submitRequest() {
     if (!canSubmit) return;
@@ -103,6 +153,8 @@ export default function QuoteCalculator({ publicMode = false }) {
     const { data, error } = await supabase.rpc("submit_quote_request", {
       p_requester_name: requesterName.trim(),
       p_requester_company: requesterCompany.trim(),
+      p_nationality: nationality,
+      p_customer_id: matchedCustomerId,
       p_lines: lines,
     });
     setSubmitting(false);
@@ -115,7 +167,11 @@ export default function QuoteCalculator({ publicMode = false }) {
 
     setSubmitted({
       id: data,
-      requester: { name: requesterName.trim(), company: requesterCompany.trim() },
+      requester: {
+        name: requesterName.trim(),
+        company: requesterCompany.trim(),
+        nationality,
+      },
       createdAt: new Date(),
       total: subtotal,
       lineItems: cart.map(l => ({ ...l, line_total: l.quantity * l.unit_price })),
@@ -126,6 +182,10 @@ export default function QuoteCalculator({ publicMode = false }) {
     setCart([]);
     setRequesterName("");
     setRequesterCompany("");
+    setNationality("");
+    setMatchedCustomerId(null);
+    setMatches([]);
+    setShowMatches(false);
     setSubmitError(null);
     setSubmitted(null);
     setPickerGrade(gradePricing[0]?.grade || "");
@@ -173,6 +233,7 @@ export default function QuoteCalculator({ publicMode = false }) {
           <p>
             Requested by: {submitted.requester.name}
             {submitted.requester.company ? ` (${submitted.requester.company})` : ""}
+            {submitted.requester.nationality ? ` · ${submitted.requester.nationality}` : ""}
           </p>
         </div>
 
@@ -284,13 +345,49 @@ export default function QuoteCalculator({ publicMode = false }) {
                   placeholder="..."
                 />
               </div>
-              <div className="field-group">
+              <div className="field-group company-field">
                 <label>Company *</label>
                 <input
                   value={requesterCompany}
-                  onChange={e => setRequesterCompany(e.target.value)}
+                  onChange={e => onCompanyChange(e.target.value)}
+                  onFocus={() => matches.length > 0 && setShowMatches(true)}
+                  onBlur={() => setTimeout(() => setShowMatches(false), 150)}
+                  onKeyDown={onCompanyKeyDown}
                   placeholder="..."
+                  autoComplete="off"
+                  role="combobox"
+                  aria-expanded={showMatches && matches.length > 0}
+                  aria-autocomplete="list"
                 />
+                {showMatches && matches.length > 0 && (
+                  <ul className="company-matches" role="listbox">
+                    {matches.map((m, i) => (
+                      <li key={m.id} role="option" aria-selected={i === activeMatch}>
+                        <button
+                          type="button"
+                          className={i === activeMatch ? "active" : ""}
+                          onMouseEnter={() => setActiveMatch(i)}
+                          onMouseDown={e => e.preventDefault()}
+                          onClick={() => pickCompany(m)}
+                        >
+                          {m.name}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {matchedCustomerId && (
+                  <p className="company-hint">✓ Matched to an existing account</p>
+                )}
+              </div>
+              <div className="field-group">
+                <label>Nationality *</label>
+                <select value={nationality} onChange={e => setNationality(e.target.value)}>
+                  <option value="">...</option>
+                  {COUNTRIES.map(c => (
+                    <option key={c.code} value={c.name}>{c.name}</option>
+                  ))}
+                </select>
               </div>
             </div>
 
@@ -368,8 +465,8 @@ export default function QuoteCalculator({ publicMode = false }) {
               onClick={submitRequest}
               disabled={!canSubmit}
               title={
-                requesterName.trim() === "" || requesterCompany.trim() === ""
-                  ? "Enter your name and company to submit"
+                requesterName.trim() === "" || requesterCompany.trim() === "" || nationality === ""
+                  ? "Enter your name, company and nationality to submit"
                   : undefined
               }
             >
