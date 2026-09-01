@@ -22,6 +22,7 @@ export default function Rfqs() {
   const [expanded, setExpanded] = useState(null);      // rfq id
   const [lineItems, setLineItems] = useState({});      // { [rfqId]: rows }
   const [promoting, setPromoting] = useState(null);    // rfq id being promoted
+  const [deleting, setDeleting] = useState(null);      // rfq id being deleted
 
   useEffect(() => { fetchRfqs(); }, []);
 
@@ -57,6 +58,28 @@ export default function Rfqs() {
     const { error } = await supabase.rpc("promote_rfq_to_customer", { p_rfq_id: rfq.id });
     setPromoting(null);
     if (error) { alert("Couldn't create the customer: " + error.message); return; }
+    fetchRfqs();
+  }
+
+  // quote_request_line_items cascades on delete, so the RFQ and its lines go
+  // together. Staff-only: the authenticated delete policy on quote_requests is
+  // what permits this, and anon has no delete privilege at all.
+  async function remove(rfq) {
+    const lines = lineItems[rfq.id]?.length;
+    if (!confirm(
+      `Delete the RFQ from ${rfq.requester_company} for ${fmt$(rfq.total)}?
+
+` +
+      `Its line items${lines ? ` (${lines})` : ""} are deleted too. This cannot be undone.`
+    )) return;
+
+    setDeleting(rfq.id);
+    const { error } = await supabase.from("quote_requests").delete().eq("id", rfq.id);
+    setDeleting(null);
+    if (error) { alert("Couldn't delete that RFQ: " + error.message); return; }
+
+    if (expanded === rfq.id) setExpanded(null);
+    setLineItems(prev => { const next = { ...prev }; delete next[rfq.id]; return next; });
     fetchRfqs();
   }
 
@@ -156,6 +179,7 @@ export default function Rfqs() {
                 <th className="sortable" onClick={() => toggleSort("location")}>Location {sortIcon("location")}</th>
                 <th className="sortable" onClick={() => toggleSort("total")}>Total {sortIcon("total")}</th>
                 <th className="sortable" onClick={() => toggleSort("status")}>Status {sortIcon("status")}</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -194,10 +218,20 @@ export default function Rfqs() {
                         {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
                       </select>
                     </td>
+                    <td onClick={e => e.stopPropagation()}>
+                      <button
+                        className="icon-btn danger"
+                        onClick={() => remove(r)}
+                        disabled={deleting === r.id}
+                        title="Delete this RFQ"
+                      >
+                        {deleting === r.id ? "…" : "✕"}
+                      </button>
+                    </td>
                   </tr>
                   {expanded === r.id && (
                     <tr className="rfq-detail-row">
-                      <td colSpan={8}>
+                      <td colSpan={9}>
                         {!lineItems[r.id] ? (
                           <div className="loading-inline">Loading items...</div>
                         ) : (
@@ -227,7 +261,7 @@ export default function Rfqs() {
                 </Fragment>
               ))}
               {filtered.length === 0 && (
-                <tr><td colSpan={8} className="empty-row">No RFQs found</td></tr>
+                <tr><td colSpan={9} className="empty-row">No RFQs found</td></tr>
               )}
             </tbody>
           </table>
