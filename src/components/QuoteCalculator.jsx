@@ -3,7 +3,7 @@ import * as XLSX from "xlsx";
 import { supabase } from "../supabaseClient";
 import { GRADES, fmtCurrency } from "../lib/pricing";
 import { COUNTRIES } from "../lib/countries";
-import logo from "../assets/logo.png";
+import PublicShell from "./PublicShell";
 
 // The customer-facing Order/RFQ page. Rendered standalone and unauthenticated
 // at / and /order (see App.jsx); also reachable as a tab inside the internal
@@ -29,7 +29,7 @@ export default function QuoteCalculator({ publicMode = false }) {
   const [cart, setCart] = useState([]);
   const [requesterName, setRequesterName] = useState("");
   const [requesterCompany, setRequesterCompany] = useState("");
-  const [nationality, setNationality] = useState("");
+  const [location, setLocation] = useState("");
   // Set only when the visitor picks a company off the type-ahead; cleared the
   // moment they edit the text again, so a stale id can't be submitted with a
   // name that no longer matches it.
@@ -141,7 +141,7 @@ export default function QuoteCalculator({ publicMode = false }) {
   const subtotal = cart.reduce((s, l) => s + (l.unit_price != null ? l.quantity * l.unit_price : 0), 0);
   const canSubmit = cart.length > 0 && !hasUnpriced
     && requesterName.trim() !== "" && requesterCompany.trim() !== ""
-    && nationality !== "" && !submitting;
+    && location !== "" && !submitting;
 
   async function submitRequest() {
     if (!canSubmit) return;
@@ -153,7 +153,7 @@ export default function QuoteCalculator({ publicMode = false }) {
     const { data, error } = await supabase.rpc("submit_quote_request", {
       p_requester_name: requesterName.trim(),
       p_requester_company: requesterCompany.trim(),
-      p_nationality: nationality,
+      p_location: location,
       p_customer_id: matchedCustomerId,
       p_lines: lines,
     });
@@ -170,7 +170,7 @@ export default function QuoteCalculator({ publicMode = false }) {
       requester: {
         name: requesterName.trim(),
         company: requesterCompany.trim(),
-        nationality,
+        location,
       },
       createdAt: new Date(),
       total: subtotal,
@@ -182,7 +182,7 @@ export default function QuoteCalculator({ publicMode = false }) {
     setCart([]);
     setRequesterName("");
     setRequesterCompany("");
-    setNationality("");
+    setLocation("");
     setMatchedCustomerId(null);
     setMatches([]);
     setShowMatches(false);
@@ -233,7 +233,7 @@ export default function QuoteCalculator({ publicMode = false }) {
           <p>
             Requested by: {submitted.requester.name}
             {submitted.requester.company ? ` (${submitted.requester.company})` : ""}
-            {submitted.requester.nationality ? ` · ${submitted.requester.nationality}` : ""}
+            {submitted.requester.location ? ` · ${submitted.requester.location}` : ""}
           </p>
         </div>
 
@@ -381,8 +381,8 @@ export default function QuoteCalculator({ publicMode = false }) {
                 )}
               </div>
               <div className="field-group">
-                <label>Nationality *</label>
-                <select value={nationality} onChange={e => setNationality(e.target.value)}>
+                <label>Location *</label>
+                <select value={location} onChange={e => setLocation(e.target.value)}>
                   <option value="">...</option>
                   {COUNTRIES.map(c => (
                     <option key={c.code} value={c.name}>{c.name}</option>
@@ -465,8 +465,8 @@ export default function QuoteCalculator({ publicMode = false }) {
               onClick={submitRequest}
               disabled={!canSubmit}
               title={
-                requesterName.trim() === "" || requesterCompany.trim() === "" || nationality === ""
-                  ? "Enter your name, company and nationality to submit"
+                requesterName.trim() === "" || requesterCompany.trim() === "" || location === ""
+                  ? "Enter your name, company and location to submit"
                   : undefined
               }
             >
@@ -479,17 +479,4 @@ export default function QuoteCalculator({ publicMode = false }) {
   );
 
   return publicMode ? <PublicShell>{builder}</PublicShell> : builder;
-}
-
-// Standalone page chrome for the public route: logo only. No sidebar, no
-// nav, no links into the internal CRM.
-function PublicShell({ children }) {
-  return (
-    <div className="public-page">
-      <header className="public-header no-print">
-        <img src={logo} alt="Phoenix Steel Supply Inc." className="brand-logo public-brand-logo" />
-      </header>
-      <div className="public-shell">{children}</div>
-    </div>
-  );
 }

@@ -1,4 +1,4 @@
-// Country list for the RFQ nationality field.
+// Country list for the RFQ location field.
 //
 // Names are derived from ISO 3166-1 alpha-2 codes via Intl.DisplayNames, which
 // every browser we target ships natively — so this costs no bundle weight and

@@ -52,11 +52,32 @@ update quote_requests set requester_company = '(not supplied)'
   where requester_company is null or trim(requester_company) = '';
 alter table quote_requests alter column requester_company set not null;
 
--- Nationality was added after the first version shipped. Stored per-RFQ (the
--- record of what was actually submitted) and also seeded onto a customer the
--- first time an RFQ creates one, so returning customers have it on file.
+-- The RFQ carries the requester's country. It shipped as "nationality" and was
+-- renamed to "location"; the rename is guarded so this file stays re-runnable
+-- whether the database is on the old name, the new one, or neither.
 alter table quote_requests add column if not exists nationality text;
-alter table customers      add column if not exists nationality text;
+do $rename$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'quote_requests'
+      and column_name = 'nationality'
+  ) and not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'quote_requests'
+      and column_name = 'location'
+  ) then
+    alter table quote_requests rename column nationality to location;
+  end if;
+end
+$rename$;
+alter table quote_requests add column if not exists location text;
+
+-- customers.location already exists (free text, e.g. "OH, USA"), so the country
+-- is seeded there rather than into a second near-duplicate column. The
+-- customers.nationality column added by the previous version of this file is
+-- now unused - see the note at the bottom of this file before dropping it.
+alter table customers add column if not exists nationality text;
 
 create index if not exists quote_requests_created_idx on quote_requests (created_at desc);
 create index if not exists quote_request_line_items_req_idx on quote_request_line_items (quote_request_id);
@@ -128,17 +149,20 @@ grant execute on function search_customers(text) to anon, authenticated;
 --      -> link that customer, verifying it exists. Never renamed.
 --   2. otherwise match customers.name case-insensitively against the typed
 --      company -> link the match.
---   3. otherwise create a customer with that name and nationality.
+--   3. otherwise create a customer with that name and location.
 --
 -- The old 3-argument version is dropped rather than left as an overload:
 -- PostgREST resolves by argument names, and two candidates would make the
 -- call ambiguous.
 drop function if exists submit_quote_request(text, text, jsonb);
+-- ...and the earlier 5-argument version this replaced. Same reason:
+-- PostgREST resolves by argument name, so a leftover overload is ambiguous.
+drop function if exists submit_quote_request(text, text, text, uuid, jsonb);
 
 create or replace function submit_quote_request(
   p_requester_name text,
   p_requester_company text,
-  p_nationality text,
+  p_location text,
   p_customer_id uuid,
   p_lines jsonb
 )
@@ -167,8 +191,8 @@ begin
     raise exception 'Company is required';
   end if;
 
-  if coalesce(trim(p_nationality), '') = '' then
-    raise exception 'Nationality is required';
+  if coalesce(trim(p_location), '') = '' then
+    raise exception 'Location is required';
   end if;
 
   if p_lines is null or jsonb_typeof(p_lines) <> 'array' then
@@ -204,22 +228,22 @@ begin
 
   -- 3. Still nothing: this is a new company.
   if v_customer_id is null then
-    insert into customers (name, location, grade_desired, contact_name, email, phone, nationality)
-    values (v_customer_name, '', '', trim(p_requester_name), '', '', trim(p_nationality))
+    insert into customers (name, location, grade_desired, contact_name, email, phone)
+    values (v_customer_name, trim(p_location), '', trim(p_requester_name), '', '')
     returning id into v_customer_id;
   else
-    -- Seed nationality onto an existing customer only when it is still blank.
+    -- Seed location onto an existing customer only when it is still blank.
     -- Never overwrite what staff have already curated.
     update customers
-    set nationality = trim(p_nationality)
+    set location = trim(p_location)
     where id = v_customer_id
-      and (nationality is null or trim(nationality) = '');
+      and (location is null or trim(location) = '');
   end if;
 
   insert into quote_requests (
-    customer_id, requester_name, requester_company, nationality, total
+    customer_id, requester_name, requester_company, location, total
   ) values (
-    v_customer_id, trim(p_requester_name), v_customer_name, trim(p_nationality), 0
+    v_customer_id, trim(p_requester_name), v_customer_name, trim(p_location), 0
   )
   returning id into v_request_id;
 
@@ -263,3 +287,9 @@ end;
 $$;
 
 grant execute on function submit_quote_request(text, text, text, uuid, jsonb) to anon, authenticated;
+
+-- Leftover from the previous version of this file: customers.nationality is no
+-- longer written or read anywhere, because the country is seeded into the
+-- pre-existing customers.location instead. Confirm it holds nothing you want,
+-- then run this once to clean it up:
+--   alter table customers drop column nationality;

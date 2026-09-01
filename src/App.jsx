@@ -3,6 +3,7 @@ import { supabase } from "./supabaseClient";
 import Auth from "./components/Auth";
 import Dashboard from "./components/Dashboard";
 import QuoteCalculator from "./components/QuoteCalculator";
+import ContactPage from "./components/ContactPage";
 import logo from "./assets/logo.png";
 import "./index.css";
 
@@ -10,12 +11,14 @@ import "./index.css";
 //
 //   /  and  /order   → public customer RFQ page. No session check, no CRM
 //                      data, no nav into the internal app.
+//   /contact         → public Contact Us form, same footer, also no auth.
 //   /staff           → employee CRM, behind the existing Supabase auth.
 //
 // Anything unrecognised falls through to the PUBLIC page on purpose: a
 // stray or guessed link must never land a customer on the internal app.
 const path = typeof window !== "undefined" ? window.location.pathname.replace(/\/+$/, "") : "";
 const isStaffRoute = path === "/staff";
+const isContactRoute = path === "/contact";
 
 export default function App() {
   const [session, setSession] = useState(null);
@@ -34,6 +37,7 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
+  if (isContactRoute) return <ContactPage />;
   if (!isStaffRoute) return <QuoteCalculator publicMode />;
 
   if (loading) return (

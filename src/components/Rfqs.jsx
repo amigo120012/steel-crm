@@ -61,7 +61,7 @@ export default function Rfqs() {
   let filtered = rfqs.filter(r => {
     if (statusFilter !== "all" && r.status !== statusFilter) return false;
     if (!search.trim()) return true;
-    const hay = [r.requester_name, r.requester_company, r.customers?.name, r.nationality, r.status]
+    const hay = [r.requester_name, r.requester_company, r.customers?.name, r.location, r.status]
       .join(" ").toLowerCase();
     return hay.includes(search.trim().toLowerCase());
   });
@@ -84,7 +84,7 @@ export default function Rfqs() {
       Requester: r.requester_name || "",
       Company: r.requester_company || "",
       "Matched Customer": r.customers?.name || "",
-      Nationality: r.nationality || "",
+      Location: r.location || "",
       Status: r.status || "",
       Total: Number(r.total ?? 0).toFixed(2),
     }));
@@ -117,7 +117,7 @@ export default function Rfqs() {
           className="search-input"
           value={search}
           onChange={e => setSearch(e.target.value)}
-          placeholder="Search requester, company, nationality..."
+          placeholder="Search requester, company, location..."
         />
         <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
           <option value="all">All statuses</option>
@@ -137,7 +137,7 @@ export default function Rfqs() {
                 <th className="sortable" onClick={() => toggleSort("requester_name")}>Requester {sortIcon("requester_name")}</th>
                 <th className="sortable" onClick={() => toggleSort("requester_company")}>Company {sortIcon("requester_company")}</th>
                 <th className="sortable" onClick={() => toggleSort("customer")}>Matched customer {sortIcon("customer")}</th>
-                <th className="sortable" onClick={() => toggleSort("nationality")}>Nationality {sortIcon("nationality")}</th>
+                <th className="sortable" onClick={() => toggleSort("location")}>Location {sortIcon("location")}</th>
                 <th className="sortable" onClick={() => toggleSort("total")}>Total {sortIcon("total")}</th>
                 <th className="sortable" onClick={() => toggleSort("status")}>Status {sortIcon("status")}</th>
               </tr>
@@ -155,7 +155,7 @@ export default function Rfqs() {
                         ? <span className="badge badge-green">{r.customers.name}</span>
                         : <span className="badge badge-gray">unlinked</span>}
                     </td>
-                    <td>{r.nationality || "—"}</td>
+                    <td>{r.location || "—"}</td>
                     <td><strong>{fmt$(r.total)}</strong></td>
                     <td onClick={e => e.stopPropagation()}>
                       <select
