@@ -1,7 +1,7 @@
 // Emails a new RFQ to the sales inbox.
 //
 // Triggered by a Supabase Database Webhook on INSERT into quote_requests
-// (see supabase/rfq_email_webhook.sql for the trigger).
+// (see supabase/06_rfq_email_webhook.sql for the trigger).
 //
 // The webhook payload's `record` is the row as it looked at INSERT time,
 // when total is still 0 and no line items exist yet — submit_quote_request()
@@ -63,6 +63,10 @@ Deno.serve(async (req) => {
         <table style="border-collapse:collapse;margin-bottom:18px;font-size:14px">
           <tr><td style="padding:3px 16px 3px 0;color:#666">Name</td><td><strong>${esc(rfq.requester_name)}</strong></td></tr>
           <tr><td style="padding:3px 16px 3px 0;color:#666">Company</td><td><strong>${esc(rfq.requester_company)}</strong></td></tr>
+          <tr><td style="padding:3px 16px 3px 0;color:#666">Location</td><td>${esc(rfq.location)}</td></tr>
+          <tr><td style="padding:3px 16px 3px 0;color:#666">Customer</td><td>${
+            rfq.customer_id ? "matched to an existing account" : "<strong>UNMATCHED</strong> - promote it from the RFQs tab"
+          }</td></tr>
         </table>
         <table style="border-collapse:collapse;width:100%;font-size:14px">
           <thead>
@@ -91,7 +95,7 @@ Deno.serve(async (req) => {
         from: FROM,
         to: [TO],
         reply_to: TO,
-        subject: `New RFQ — ${rfq.requester_company} — ${money(Number(rfq.total))}`,
+        subject: `${rfq.customer_id ? "New RFQ" : "New RFQ (unmatched)"} — ${rfq.requester_company} — ${money(Number(rfq.total))}`,
         html,
       }),
     });

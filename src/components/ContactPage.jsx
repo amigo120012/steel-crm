@@ -7,9 +7,10 @@ import PublicShell from "./PublicShell";
 // Messages are logged to Supabase through submit_contact_message(), the same
 // SECURITY DEFINER pattern the RFQ form uses — anon has no direct grant on
 // contact_messages. No email service is involved, so this works with zero
-// additional setup; see supabase/contact_messages.sql for the optional
+// additional setup; see supabase/03_contact_messages.sql for the optional
 // webhook that can forward these to email later.
 
+const MAX_EMAIL = 254;
 const MAX_SUBJECT = 200;
 const MAX_BODY = 5000;
 
@@ -18,19 +19,25 @@ export default function ContactPage() {
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
+  // Honeypot — see the RFQ form for the same pattern.
+  const [website, setWebsite] = useState("");
   const [error, setError] = useState(null);
   const [sent, setSent] = useState(false);
 
-  const canSend = subject.trim() !== "" && body.trim() !== "" && !sending;
+  // Mirrors the server rule in submit_contact_message(): email is required and
+  // must look like an address.
+  const emailValid = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim());
+  const canSend = emailValid && subject.trim() !== "" && body.trim() !== "" && !sending;
 
   async function send() {
     if (!canSend) return;
     setSending(true);
     setError(null);
     const { error } = await supabase.rpc("submit_contact_message", {
-      p_email: email.trim() || null,
+      p_email: email.trim(),
       p_subject: subject.trim(),
       p_body: body.trim(),
+      p_website: website,
     });
     setSending(false);
     if (error) {
@@ -48,6 +55,7 @@ export default function ContactPage() {
     setBody("");
     setError(null);
     setSent(false);
+    setWebsite("");
   }
 
   return (
@@ -74,19 +82,33 @@ export default function ContactPage() {
             <div className="page-header">
               <div>
                 <h1>Contact Us</h1>
-                <p className="page-sub">Questions about grades, lead times or an existing quote?</p>
+                <p className="page-sub">Questions about grades, lead times or an existing quote? We&apos;ll reply to the address you give us.</p>
               </div>
             </div>
 
             <div className="contact-form">
+              <input
+                className="hp-field"
+                type="text"
+                tabIndex={-1}
+                autoComplete="off"
+                aria-hidden="true"
+                value={website}
+                onChange={e => setWebsite(e.target.value)}
+              />
+
               <div className="field-group">
-                <label>Your email (optional, so we can reply)</label>
+                <label>Your email *</label>
                 <input
                   type="email"
                   value={email}
-                  onChange={e => setEmail(e.target.value)}
+                  onChange={e => setEmail(e.target.value.slice(0, MAX_EMAIL))}
+                  maxLength={MAX_EMAIL}
                   placeholder="..."
                 />
+                {email.trim() !== "" && !emailValid && (
+                  <span className="field-hint-error">Enter a valid email address</span>
+                )}
               </div>
               <div className="field-group">
                 <label>Subject *</label>

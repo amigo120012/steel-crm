@@ -540,3 +540,19 @@ code { font-family: var(--mono); font-size: 12px; background: var(--chip); paddi
 @media (max-width: 780px) {
   .public-footer { flex-direction: column; align-items: flex-start; }
 }
+
+/* ── Honeypot ─────────────────────────────────────── */
+/* Off-screen rather than display:none — some bots skip hidden inputs, but a
+   field that is merely positioned away still gets filled. Kept out of the tab
+   order and the accessibility tree so no real person can reach it. */
+.hp-field {
+  position: absolute !important;
+  left: -9999px !important;
+  width: 1px; height: 1px;
+  opacity: 0; pointer-events: none;
+}
+
+/* ── Unmatched RFQ ────────────────────────────────── */
+.unmatched-cell { display: inline-flex; align-items: center; gap: 8px; }
+.badge-amber { background: var(--amber-light); color: var(--amber); box-shadow: inset 0 0 0 1px var(--amber-border); }
+.field-hint-error { font-size: 11px; color: var(--red); }

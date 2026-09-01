@@ -1,10 +1,11 @@
 -- Phoenix.SS: Contact Us messages from the public site.
 --
--- Run this in Supabase → SQL Editor. Safe to re-run.
+-- RUN ORDER: 01_rate_limiting.sql first (this file calls check_rate_limit).
+-- Safe to re-run.
 --
 -- Same shape as the RFQ flow: anon gets no direct grant on the table and can
--- only write through one SECURITY DEFINER function, which does its own
--- validation and length capping. Staff read these as authenticated.
+-- only write through one SECURITY DEFINER function, which validates, caps
+-- lengths, rejects the honeypot and rate-limits by IP.
 
 create table if not exists contact_messages (
   id uuid primary key default gen_random_uuid(),
@@ -14,6 +15,12 @@ create table if not exists contact_messages (
   status text not null default 'new',
   created_at timestamptz not null default now()
 );
+
+-- Email became required after the first version of this file shipped.
+-- Backfill anything already stored so the constraint can be applied.
+update contact_messages set email = '(not supplied)'
+  where email is null or trim(email) = '';
+alter table contact_messages alter column email set not null;
 
 create index if not exists contact_messages_created_idx on contact_messages (created_at desc);
 
@@ -30,13 +37,14 @@ create policy "authenticated delete contact_messages" on contact_messages
   for delete to authenticated using (true);
 
 -- ── submit_contact_message() ─────────────────────────────────────
--- Length caps are enforced here, not just in the browser, so a scripted post
--- cannot use this as a free text dump. Email is optional but must look like an
--- address if supplied.
+-- p_website is a honeypot: a hidden field no human ever fills.
+drop function if exists submit_contact_message(text, text, text);
+
 create or replace function submit_contact_message(
   p_email text,
   p_subject text,
-  p_body text
+  p_body text,
+  p_website text default null
 )
 returns uuid
 language plpgsql
@@ -46,6 +54,24 @@ as $$
 declare
   v_id uuid;
 begin
+  if p_website is not null and trim(p_website) <> '' then
+    raise exception 'Submission rejected';
+  end if;
+
+  perform check_rate_limit('contact', 3, interval '10 minutes');
+
+  if coalesce(trim(p_email), '') = '' then
+    raise exception 'Email is required';
+  end if;
+
+  if trim(p_email) !~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$' then
+    raise exception 'That email address does not look valid';
+  end if;
+
+  if char_length(trim(p_email)) > 254 then
+    raise exception 'Email is too long';
+  end if;
+
   if coalesce(trim(p_subject), '') = '' then
     raise exception 'Subject is required';
   end if;
@@ -54,33 +80,24 @@ begin
     raise exception 'Message is required';
   end if;
 
-  if length(p_subject) > 200 then
+  if char_length(p_subject) > 200 then
     raise exception 'Subject is too long (max 200 characters)';
   end if;
 
-  if length(p_body) > 5000 then
+  if char_length(p_body) > 5000 then
     raise exception 'Message is too long (max 5000 characters)';
   end if;
 
-  if p_email is not null and trim(p_email) <> ''
-     and trim(p_email) !~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$' then
-    raise exception 'That email address does not look valid';
-  end if;
-
   insert into contact_messages (email, subject, body)
-  values (nullif(trim(p_email), ''), trim(p_subject), trim(p_body))
+  values (trim(p_email), trim(p_subject), trim(p_body))
   returning id into v_id;
 
   return v_id;
 end;
 $$;
 
-grant execute on function submit_contact_message(text, text, text) to anon, authenticated;
+grant execute on function submit_contact_message(text, text, text, text) to anon, authenticated;
 
--- Optional: forward these to email as well.
---
--- Nothing here sends email — messages land in this table and staff read them.
--- To also get them in an inbox, deploy the notify-rfq Edge Function pattern in
--- supabase/functions/ against this table and add a Database Webhook on INSERT
--- into contact_messages. That needs a Resend (or similar) API key; logging to
--- the table needs nothing.
+-- Optional: forward these to email as well, using the same Edge Function +
+-- Database Webhook pattern as the RFQ notifier (supabase/functions/notify-rfq).
+-- Logging to this table needs nothing extra; email needs a Resend API key.

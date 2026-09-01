@@ -1,3 +1,12 @@
+-- ⚠️ LEGACY / RETIRED — kept only as the schema record for the order_requests
+-- table, which still exists and may hold real submissions from before the RFQ
+-- flow replaced it.
+--
+-- DO NOT RUN THIS FILE. 05_security_hardening.sql drops submit_order_request()
+-- on purpose: it trusted the client-supplied price and created customers rows
+-- from an unauthenticated call. Its only caller (src/components/OrderPage.jsx)
+-- has been deleted. The live flow is 02_quote_requests.sql.
+--
 -- Phoenix.SS: Public order request flow (no-login customer order form)
 -- Run this in Supabase → SQL Editor, after pricing_and_quotes.sql.
 --

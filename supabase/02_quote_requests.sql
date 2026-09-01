@@ -1,29 +1,27 @@
--- Phoenix.SS: Public quote-request flow for the customer-facing RFQ page
--- (src/components/QuoteCalculator.jsx, served at / and /order).
+-- Phoenix.SS: public quote-request (RFQ) flow.
 --
--- Run this in Supabase → SQL Editor, after pricing_and_quotes.sql.
+-- RUN ORDER: 01_rate_limiting.sql first (this file calls check_rate_limit).
+-- Safe to re-run; every statement is idempotent or guarded.
 --
--- This is the multi-line-item sibling of order_requests.sql and follows the
--- same rule: anonymous visitors get exactly one narrow write path and no
--- direct grant on any CRM table.
+-- Anonymous visitors get exactly two entry points and no direct grant on any
+-- table:
 --
---   * Reads go through the existing pricing_public view — grade + final
---     selling price only. base_cost_per_lb, adjustment_per_lb and margin
---     stay behind pricing_grades' authenticated-only RLS.
+--   * pricing_public (view)   grade + final selling price only. base cost,
+--                             adjustment and margin stay behind
+--                             pricing_grades' authenticated-only RLS.
+--   * submit_quote_request()  SECURITY DEFINER. Re-prices every line from
+--                             pricing_grades, so a tampered browser cannot
+--                             dictate what it pays.
+--   * search_customers()      SECURITY DEFINER company type-ahead, id + name
+--                             only, 3-char minimum, prefix match, 8 rows.
 --
---   * Writes go through submit_quote_request(), a SECURITY DEFINER function.
---     The client sends only grade / width / quantity; the function looks the
---     price up itself from pricing_grades, so a tampered browser cannot
---     dictate its own unit price. (Note: order_requests.sql's older
---     submit_order_request() does trust the client-supplied price — worth
---     tightening the same way if that form stays in use.)
---
---   * Company type-ahead goes through search_customers(), also SECURITY
---     DEFINER. anon still has NO select grant on customers; that function is
---     the only way a public visitor sees a company name, and it requires 3+
---     characters and returns at most 8 prefix matches.
+-- Customer matching policy (changed): an RFQ NEVER creates a customer record.
+-- If the typed company matches nothing, customer_id is left NULL and the RFQ
+-- shows as "unmatched" in the CRM, where staff promote it deliberately via
+-- promote_rfq_to_customer(). Before this change, anyone could grow the
+-- customers table by submitting new company names.
 
--- ── quote_requests ───────────────────────────────────────────────
+-- ── tables ───────────────────────────────────────────────────────
 create table if not exists quote_requests (
   id uuid primary key default gen_random_uuid(),
   customer_id uuid references customers(id) on delete set null,
@@ -44,17 +42,15 @@ create table if not exists quote_request_line_items (
   line_total numeric(12,2) not null
 );
 
--- Company became required after the first version of this file shipped. The
--- `create table if not exists` above is a no-op on a database that already
--- ran that version, so retrofit the constraint explicitly. Both statements
--- are idempotent and safe to re-run.
+-- Company became required after the first version of this file shipped, and
+-- `create table if not exists` is a no-op on an existing table, so retrofit it.
 update quote_requests set requester_company = '(not supplied)'
   where requester_company is null or trim(requester_company) = '';
 alter table quote_requests alter column requester_company set not null;
 
 -- The RFQ carries the requester's country. It shipped as "nationality" and was
--- renamed to "location"; the rename is guarded so this file stays re-runnable
--- whether the database is on the old name, the new one, or neither.
+-- renamed to "location"; guarded so this file stays re-runnable whether the
+-- database is on the old name, the new one, or neither.
 alter table quote_requests add column if not exists nationality text;
 do $rename$
 begin
@@ -73,20 +69,23 @@ end
 $rename$;
 alter table quote_requests add column if not exists location text;
 
--- customers.location already exists (free text, e.g. "OH, USA"), so the country
--- is seeded there rather than into a second near-duplicate column. The
--- customers.nationality column added by the previous version of this file is
--- now unused - see the note at the bottom of this file before dropping it.
-alter table customers add column if not exists nationality text;
+-- Length caps at the storage layer, so an oversized value cannot be stored even
+-- if some future caller skips the function.
+alter table quote_requests
+  add constraint quote_requests_requester_name_len
+  check (char_length(requester_name) <= 120) not valid;
+alter table quote_requests
+  add constraint quote_requests_requester_company_len
+  check (char_length(requester_company) <= 200) not valid;
 
 create index if not exists quote_requests_created_idx on quote_requests (created_at desc);
+create index if not exists quote_requests_unmatched_idx on quote_requests (customer_id) where customer_id is null;
 create index if not exists quote_request_line_items_req_idx on quote_request_line_items (quote_request_id);
 
+-- ── RLS ──────────────────────────────────────────────────────────
 alter table quote_requests enable row level security;
 alter table quote_request_line_items enable row level security;
 
--- Staff read and manage these from the CRM. Public submissions arrive via
--- the function below, not through an anon policy.
 drop policy if exists "authenticated read quote_requests" on quote_requests;
 create policy "authenticated read quote_requests" on quote_requests
   for select to authenticated using (true);
@@ -107,15 +106,7 @@ drop policy if exists "authenticated delete quote_request_line_items" on quote_r
 create policy "authenticated delete quote_request_line_items" on quote_request_line_items
   for delete to authenticated using (true);
 
--- ── search_customers() ──────────────────────────────────────────
--- Powers the company type-ahead on the PUBLIC RFQ form.
---
--- anon deliberately has no select grant on customers. This is the only way a
--- public visitor ever sees a company name, and it is narrowed on purpose:
--- 3-character minimum, prefix match only (not substring), 8 rows maximum. That
--- makes casual enumeration impractical without blocking a genuine customer
--- typing their own company. It returns id + name and nothing else — no
--- contacts, margins, volumes or notes.
+-- ── search_customers() ───────────────────────────────────────────
 create or replace function search_customers(p_prefix text)
 returns table (id uuid, name text)
 language plpgsql
@@ -140,23 +131,12 @@ $$;
 grant execute on function search_customers(text) to anon, authenticated;
 
 -- ── submit_quote_request() ───────────────────────────────────────
--- p_lines is a JSON array of { grade, width, quantity }. Prices are NOT
--- accepted from the client — each line is re-priced from pricing_grades
--- using the same base + adjustment formula as pricing_public.
+-- p_website is a honeypot: a hidden field no human ever fills. Any value at
+-- all means a bot filled the form, and the call is rejected.
 --
--- Customer resolution, in order:
---   1. p_customer_id given (the visitor picked a company from the type-ahead)
---      -> link that customer, verifying it exists. Never renamed.
---   2. otherwise match customers.name case-insensitively against the typed
---      company -> link the match.
---   3. otherwise create a customer with that name and location.
---
--- The old 3-argument version is dropped rather than left as an overload:
--- PostgREST resolves by argument names, and two candidates would make the
--- call ambiguous.
+-- Earlier signatures are dropped rather than left as overloads, since PostgREST
+-- resolves by argument name and multiple candidates are ambiguous.
 drop function if exists submit_quote_request(text, text, jsonb);
--- ...and the earlier 5-argument version this replaced. Same reason:
--- PostgREST resolves by argument name, so a leftover overload is ambiguous.
 drop function if exists submit_quote_request(text, text, text, uuid, jsonb);
 
 create or replace function submit_quote_request(
@@ -164,7 +144,8 @@ create or replace function submit_quote_request(
   p_requester_company text,
   p_location text,
   p_customer_id uuid,
-  p_lines jsonb
+  p_lines jsonb,
+  p_website text default null
 )
 returns uuid
 language plpgsql
@@ -183,16 +164,32 @@ declare
   v_total numeric := 0;
   v_count int;
 begin
+  -- Honeypot. Deliberately the same generic error a human would never see.
+  if p_website is not null and trim(p_website) <> '' then
+    raise exception 'Submission rejected';
+  end if;
+
+  perform check_rate_limit('rfq', 5, interval '10 minutes');
+
   if coalesce(trim(p_requester_name), '') = '' then
     raise exception 'Requester name is required';
+  end if;
+  if char_length(trim(p_requester_name)) > 120 then
+    raise exception 'Name is too long (max 120 characters)';
   end if;
 
   if coalesce(trim(p_requester_company), '') = '' then
     raise exception 'Company is required';
   end if;
+  if char_length(trim(p_requester_company)) > 200 then
+    raise exception 'Company name is too long (max 200 characters)';
+  end if;
 
   if coalesce(trim(p_location), '') = '' then
     raise exception 'Location is required';
+  end if;
+  if char_length(trim(p_location)) > 100 then
+    raise exception 'Location is too long';
   end if;
 
   if p_lines is null or jsonb_typeof(p_lines) <> 'array' then
@@ -203,14 +200,16 @@ begin
   if v_count = 0 then
     raise exception 'At least one line item is required';
   end if;
-  -- Bounds the work a single anonymous call can trigger.
   if v_count > 50 then
     raise exception 'Too many line items (max 50)';
   end if;
 
   v_customer_name := trim(p_requester_company);
 
-  -- 1. Explicit pick from the type-ahead.
+  -- Customer resolution. NOTE: no branch creates a customer.
+  --   1. explicit pick from the type-ahead -> link it, verifying it exists
+  --   2. otherwise an exact case-insensitive name match -> link it
+  --   3. otherwise leave NULL -> the CRM shows this RFQ as unmatched
   if p_customer_id is not null then
     select c.id into v_customer_id from customers c where c.id = p_customer_id;
     if v_customer_id is null then
@@ -218,7 +217,6 @@ begin
     end if;
   end if;
 
-  -- 2. Fall back to a case-insensitive name match.
   if v_customer_id is null then
     select c.id into v_customer_id
     from customers c
@@ -226,14 +224,9 @@ begin
     limit 1;
   end if;
 
-  -- 3. Still nothing: this is a new company.
-  if v_customer_id is null then
-    insert into customers (name, location, grade_desired, contact_name, email, phone)
-    values (v_customer_name, trim(p_location), '', trim(p_requester_name), '', '')
-    returning id into v_customer_id;
-  else
-    -- Seed location onto an existing customer only when it is still blank.
-    -- Never overwrite what staff have already curated.
+  -- Seed location onto a matched customer only when it is still blank.
+  -- Never overwrite what staff have curated.
+  if v_customer_id is not null then
     update customers
     set location = trim(p_location)
     where id = v_customer_id
@@ -286,10 +279,55 @@ begin
 end;
 $$;
 
-grant execute on function submit_quote_request(text, text, text, uuid, jsonb) to anon, authenticated;
+grant execute on function submit_quote_request(text, text, text, uuid, jsonb, text) to anon, authenticated;
 
--- Leftover from the previous version of this file: customers.nationality is no
--- longer written or read anywhere, because the country is seeded into the
--- pre-existing customers.location instead. Confirm it holds nothing you want,
--- then run this once to clean it up:
+-- ── promote_rfq_to_customer() ────────────────────────────────────
+-- Staff-only. Turns an unmatched RFQ into a real customer record and links it.
+-- This is the ONLY path that creates a customer from RFQ data now.
+create or replace function promote_rfq_to_customer(p_rfq_id uuid)
+returns uuid
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+  v_rfq quote_requests;
+  v_customer_id uuid;
+begin
+  select * into v_rfq from quote_requests where id = p_rfq_id;
+  if v_rfq.id is null then
+    raise exception 'RFQ not found';
+  end if;
+  if v_rfq.customer_id is not null then
+    raise exception 'This RFQ is already linked to a customer';
+  end if;
+
+  -- Someone may have created the company in the meantime; link rather than
+  -- duplicate.
+  select c.id into v_customer_id
+  from customers c
+  where lower(c.name) = lower(trim(v_rfq.requester_company))
+  limit 1;
+
+  if v_customer_id is null then
+    insert into customers (name, location, grade_desired, contact_name, email, phone)
+    values (trim(v_rfq.requester_company), coalesce(trim(v_rfq.location), ''), '',
+            trim(v_rfq.requester_name), '', '')
+    returning id into v_customer_id;
+  end if;
+
+  update quote_requests set customer_id = v_customer_id where id = p_rfq_id;
+  return v_customer_id;
+end;
+$$;
+
+-- security invoker: this runs as the signed-in staff member, so the existing
+-- customers RLS applies. anon must never be able to call it.
+revoke all on function promote_rfq_to_customer(uuid) from public, anon;
+grant execute on function promote_rfq_to_customer(uuid) to authenticated;
+
+-- ── leftover cleanup ─────────────────────────────────────────────
+-- customers.nationality is no longer written or read anywhere; the country is
+-- seeded into the pre-existing customers.location instead. Confirm it holds
+-- nothing you want, then run this once:
 --   alter table customers drop column nationality;

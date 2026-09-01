@@ -15,12 +15,17 @@ import PublicShell from "./PublicShell";
 // are never shipped to a customer's browser.
 //
 // Submissions go through submit_quote_request(), a SECURITY DEFINER function
-// (see supabase/quote_requests.sql) that re-prices every line server-side.
+// (see supabase/02_quote_requests.sql) that re-prices every line server-side.
 // Nothing here writes to customers, quotes or quote_line_items directly.
 
 const fmt$ = n => "$" + Number(n ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 let tempIdCounter = 0;
 const nextTempId = () => `tmp-${++tempIdCounter}`;
+
+// Server-enforced too (see supabase/02_quote_requests.sql); these just stop the
+// browser sending something that would only bounce back.
+const MAX_NAME = 120;
+const MAX_COMPANY = 200;
 
 export default function QuoteCalculator({ publicMode = false }) {
   const [gradePricing, setGradePricing] = useState([]);
@@ -37,6 +42,9 @@ export default function QuoteCalculator({ publicMode = false }) {
   const [matches, setMatches] = useState([]);
   const [showMatches, setShowMatches] = useState(false);
   const [activeMatch, setActiveMatch] = useState(-1);
+  // Honeypot. Hidden from people and from screen readers; only a bot that fills
+  // every input will set it, and the server rejects the call if it is non-empty.
+  const [website, setWebsite] = useState("");
   const [pickerGrade, setPickerGrade] = useState("");
   const [pickerWidth, setPickerWidth] = useState("");
   const [pickerQty, setPickerQty] = useState("");
@@ -156,6 +164,7 @@ export default function QuoteCalculator({ publicMode = false }) {
       p_location: location,
       p_customer_id: matchedCustomerId,
       p_lines: lines,
+      p_website: website,
     });
     setSubmitting(false);
     if (error) {
@@ -337,11 +346,21 @@ export default function QuoteCalculator({ publicMode = false }) {
 
           <div className="cart-panel">
             <div className="requester-fields">
+              <input
+                className="hp-field"
+                type="text"
+                tabIndex={-1}
+                autoComplete="off"
+                aria-hidden="true"
+                value={website}
+                onChange={e => setWebsite(e.target.value)}
+              />
               <div className="field-group">
                 <label>Your name *</label>
                 <input
                   value={requesterName}
-                  onChange={e => setRequesterName(e.target.value)}
+                  onChange={e => setRequesterName(e.target.value.slice(0, MAX_NAME))}
+                  maxLength={MAX_NAME}
                   placeholder="..."
                 />
               </div>
@@ -349,7 +368,8 @@ export default function QuoteCalculator({ publicMode = false }) {
                 <label>Company *</label>
                 <input
                   value={requesterCompany}
-                  onChange={e => onCompanyChange(e.target.value)}
+                  onChange={e => onCompanyChange(e.target.value.slice(0, MAX_COMPANY))}
+                  maxLength={MAX_COMPANY}
                   onFocus={() => matches.length > 0 && setShowMatches(true)}
                   onBlur={() => setTimeout(() => setShowMatches(false), 150)}
                   onKeyDown={onCompanyKeyDown}

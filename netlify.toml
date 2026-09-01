@@ -5,9 +5,40 @@
 [build.environment]
   NODE_VERSION = "20"
 
-# Single-page app: let client-side routing handle /order (the public order
-# form) instead of Netlify 404ing on a direct link/refresh.
+# Single-page app: let client-side routing handle /order, /contact and /staff
+# instead of Netlify 404ing on a direct link or refresh.
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
+
+# ── Security headers ─────────────────────────────────────────────
+#
+# CSP notes, so these are safe to edit later:
+#
+#   connect-src   the Supabase project is the only network destination the app
+#                 talks to. wss: is included because supabase-js opens a
+#                 realtime socket if any feature ever uses it; drop it if you
+#                 want to be stricter.
+#   style-src     'unsafe-inline' is required: the components use React inline
+#                 style={{...}} props, and fonts.googleapis.com serves the
+#                 stylesheet that index.css @imports.
+#   font-src      Google Fonts serves the actual font files from gstatic.
+#   script-src    NO 'unsafe-inline' — Vite emits an external bundle only, so
+#                 injected inline script is blocked outright.
+#   img-src       data: covers the inlined favicon/asset URIs Vite may produce.
+#   frame-ancestors  'none' is the modern replacement for X-Frame-Options;
+#                 the header below is kept for older browsers.
+#
+# If you add an analytics or error-reporting service later, it needs an entry
+# in connect-src (and script-src if it loads a tag) or it will silently fail.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://grzvxlitfdadezrourpk.supabase.co wss://grzvxlitfdadezrourpk.supabase.co; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=()"
+    # Only takes effect once the site is served over HTTPS on your own domain.
+    Strict-Transport-Security = "max-age=31536000; includeSubDomains"

@@ -7,7 +7,7 @@ import { fmtCurrency } from "../lib/pricing";
 // Behind the same auth as every other Dashboard tab — see App.jsx.
 //
 // Reads quote_requests joined to the customer the submission was matched to
-// (see submit_quote_request in supabase/quote_requests.sql), and loads the
+// (see submit_quote_request in supabase/02_quote_requests.sql), and loads the
 // line items lazily when a row is expanded, so the list stays one query.
 
 const fmt$ = n => "$" + Number(n ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -21,6 +21,7 @@ export default function Rfqs() {
   const [sort, setSort] = useState({ col: "created_at", dir: "desc" });
   const [expanded, setExpanded] = useState(null);      // rfq id
   const [lineItems, setLineItems] = useState({});      // { [rfqId]: rows }
+  const [promoting, setPromoting] = useState(null);    // rfq id being promoted
 
   useEffect(() => { fetchRfqs(); }, []);
 
@@ -47,6 +48,18 @@ export default function Rfqs() {
     }
   }
 
+  // The public form no longer creates customers (see 02_quote_requests.sql), so
+  // an unmatched company arrives with customer_id NULL and is promoted here,
+  // deliberately, by staff.
+  async function promote(rfq) {
+    if (!confirm(`Create a new customer "${rfq.requester_company}" and link this RFQ to it?`)) return;
+    setPromoting(rfq.id);
+    const { error } = await supabase.rpc("promote_rfq_to_customer", { p_rfq_id: rfq.id });
+    setPromoting(null);
+    if (error) { alert("Couldn't create the customer: " + error.message); return; }
+    fetchRfqs();
+  }
+
   async function updateStatus(id, status) {
     setRfqs(rs => rs.map(r => (r.id === id ? { ...r, status } : r)));
     const { error } = await supabase.from("quote_requests").update({ status }).eq("id", id);
@@ -59,7 +72,9 @@ export default function Rfqs() {
   const sortIcon = col => (sort.col !== col ? "" : sort.dir === "asc" ? "▲" : "▼");
 
   let filtered = rfqs.filter(r => {
-    if (statusFilter !== "all" && r.status !== statusFilter) return false;
+    if (statusFilter === "unmatched") {
+      if (r.customer_id) return false;
+    } else if (statusFilter !== "all" && r.status !== statusFilter) return false;
     if (!search.trim()) return true;
     const hay = [r.requester_name, r.requester_company, r.customers?.name, r.location, r.status]
       .join(" ").toLowerCase();
@@ -121,6 +136,7 @@ export default function Rfqs() {
         />
         <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
           <option value="all">All statuses</option>
+          <option value="unmatched">Unmatched only</option>
           {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
       </div>
@@ -151,9 +167,21 @@ export default function Rfqs() {
                     <td>{r.requester_name}</td>
                     <td>{r.requester_company}</td>
                     <td>
-                      {r.customers?.name
-                        ? <span className="badge badge-green">{r.customers.name}</span>
-                        : <span className="badge badge-gray">unlinked</span>}
+                      {r.customers?.name ? (
+                        <span className="badge badge-green">{r.customers.name}</span>
+                      ) : (
+                        <span className="unmatched-cell" onClick={e => e.stopPropagation()}>
+                          <span className="badge badge-amber">unmatched</span>
+                          <button
+                            className="expand-btn"
+                            onClick={() => promote(r)}
+                            disabled={promoting === r.id}
+                            title={`Create "${r.requester_company}" as a customer`}
+                          >
+                            {promoting === r.id ? "Creating..." : "+ Create customer"}
+                          </button>
+                        </span>
+                      )}
                     </td>
                     <td>{r.location || "—"}</td>
                     <td><strong>{fmt$(r.total)}</strong></td>
