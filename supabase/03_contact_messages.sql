@@ -58,6 +58,8 @@ begin
     raise exception 'Submission rejected';
   end if;
 
+  -- Caps successful submissions at 3 per IP per 10 minutes; failed calls roll
+  -- back and are not counted (see LIMITATION 1 in 01_rate_limiting.sql).
   perform check_rate_limit('contact', 3, interval '10 minutes');
 
   if coalesce(trim(p_email), '') = '' then

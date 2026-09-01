@@ -169,6 +169,9 @@ begin
     raise exception 'Submission rejected';
   end if;
 
+  -- Caps successful submissions at 5 per IP per 10 minutes. Note that calls
+  -- which raise below are rolled back and therefore not counted — see the
+  -- LIMITATION 1 note in 01_rate_limiting.sql.
   perform check_rate_limit('rfq', 5, interval '10 minutes');
 
   if coalesce(trim(p_requester_name), '') = '' then

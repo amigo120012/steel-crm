@@ -7,7 +7,22 @@
 -- `request.headers` GUC, so a SECURITY DEFINER function can see the caller's
 -- forwarded IP without any application-level plumbing.
 --
--- LIMITATION, read this: x-forwarded-for is a client-supplied header that
+-- LIMITATION 1 — WHAT THIS DOES AND DOES NOT THROTTLE. PostgREST runs each RPC
+-- in one transaction. check_rate_limit() records its hit by INSERTing, so if
+-- the calling function later raises (failed validation, honeypot, bad grade),
+-- that INSERT is rolled back with everything else and the attempt is NOT
+-- counted. Verified against the live database: six malformed RFQ calls in a
+-- row all passed, while six calls that COMMIT are correctly blocked on the
+-- sixth.
+--
+-- So this caps SUCCESSFUL submissions per IP, which is the CRM-integrity
+-- control we wanted: no one can flood quote_requests or contact_messages.
+-- It does NOT throttle a bot spraying malformed payloads. Those write nothing,
+-- so the cost is bandwidth and CPU rather than data — handle it at the edge
+-- (Netlify/Cloudflare rate limiting, or Turnstile) rather than in Postgres,
+-- which has no autonomous transactions to record the attempt with.
+--
+-- LIMITATION 2: x-forwarded-for is a client-supplied header that
 -- Supabase's edge appends the real peer address to. We take the LAST entry,
 -- which is the one the edge added and the hardest for a caller to forge; the
 -- leftmost entries are attacker-controlled. This raises the cost of scripted
@@ -92,5 +107,11 @@ end;
 $$;
 
 -- Callable only from the SECURITY DEFINER submit functions, never directly.
-revoke all on function client_ip() from anon, authenticated;
-revoke all on function check_rate_limit(text, int, interval) from anon, authenticated;
+--
+-- NOTE the "from public": Postgres grants EXECUTE on every new function to the
+-- PUBLIC role by default, and revoking from anon/authenticated alone leaves
+-- that default in place — the functions stay callable. PUBLIC must be revoked
+-- explicitly. Without this, anyone could POST to /rpc/check_rate_limit and
+-- insert unbounded rows into rate_limit_hits.
+revoke all on function client_ip() from public, anon, authenticated;
+revoke all on function check_rate_limit(text, int, interval) from public, anon, authenticated;
