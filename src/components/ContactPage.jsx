@@ -59,7 +59,7 @@ export default function ContactPage() {
   }
 
   return (
-    <PublicShell>
+    <PublicShell showContact={false}>
       <div className="page contact-page">
         {sent ? (
           <>
@@ -82,7 +82,6 @@ export default function ContactPage() {
             <div className="page-header">
               <div>
                 <h1>Contact Us</h1>
-                <p className="page-sub">Questions about grades, lead times or an existing quote? We&apos;ll reply to the address you give us.</p>
               </div>
             </div>
 
