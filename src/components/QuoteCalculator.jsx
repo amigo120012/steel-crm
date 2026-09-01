@@ -243,7 +243,7 @@ export default function QuoteCalculator({ publicMode = false }) {
                 type="number" step="0.1" min="0"
                 value={pickerWidth}
                 onChange={e => setPickerWidth(e.target.value)}
-                placeholder="e.g. 3.5 — record only, doesn't affect price"
+                placeholder="..."
               />
             </div>
             <div className="field-group">
@@ -252,7 +252,7 @@ export default function QuoteCalculator({ publicMode = false }) {
                 type="number" min="0"
                 value={pickerQty}
                 onChange={e => setPickerQty(e.target.value)}
-                placeholder="e.g. 5000"
+                placeholder="..."
               />
             </div>
 
